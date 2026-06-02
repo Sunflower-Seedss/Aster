@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sunny's Dreamjourney Toolkit V1</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 264px; background: #18181b; color: #e4e4e7;
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; padding: 16px; }
+  h1 { font-size: 13px; font-weight: 700; margin-bottom: 4px; color: #a78bfa; }
+  .credit { font-size: 10px; color: #52525b; margin-bottom: 14px; }
+  section { margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 12px; }
+  section h2 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em; color: #71717a; margin-bottom: 8px; }
+  .row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; }
+  .row:last-child { border-bottom: none; }
+  .row span { color: #a1a1aa; }
+  .nexus { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; font-size: 11px; }
+  .nexus span { color: #a1a1aa; flex: 1; }
+  .green  { color: #22c55e; font-weight: 700; }
+  .orange { color: #f97316; font-weight: 700; }
+  .red    { color: #ef4444; font-weight: 700; }
+  .warn { display: none; margin-top: 6px; font-size: 11px; color: #fca5a5; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.25); border-radius: 6px; padding: 4px 8px; line-height: 1.4; }
+  button.act { width: 100%; padding: 8px; background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3); border-radius: 6px; color: #a78bfa; font-size: 12px; font-weight: 600; cursor: pointer; margin-bottom: 6px; font-family: inherit; }
+  button.act:hover { background: rgba(99,102,241,0.3); }
+  #none { color: #52525b; font-size: 12px; display: none; }
+  #status { font-size: 11px; color: #71717a; margin-top: 6px; text-align: center; min-height: 14px; }
+  .hint { font-size: 10px; color: #3f3f46; margin-top: 8px; line-height: 1.45; }
+</style>
+</head>
+<body>
+  <h1>Sunny's Dreamjourney Toolkit V1</h1>
+  <div class="credit">Made by SunflowerS at Dreamjourney AI</div>
+  <section>
+    <h2>Session stats</h2>
+    <div id="stats">
+      <div class="row"><span>Your messages</span><b id="p-user">&#8212;</b></div>
+      <div class="row"><span>Bot messages</span><b id="p-bot">&#8212;</b></div>
+      <div class="row"><span>Total</span><b id="p-total">&#8212;</b></div>
+      <div class="row"><span>Rerolls</span><b id="p-rerolls">&#8212;</b></div>
+      <div class="nexus">
+        <span>Msgs since last Nexus check-up</span>
+        <b id="p-nexus">&#8212;</b>
+      </div>
+      <div class="warn" id="p-warn">Recommended to check Nexus for accuracy!</div>
+    </div>
+    <div id="none">Open a DreamJourney chat to see stats.</div>
+  </section>
+  <section>
+    <h2>Actions</h2>
+    <button class="act" id="btn-export">Export stats as .txt</button>
+  </section>
+  <div id="status"></div>
+  <div class="hint">Toggles, saved replies, scratchpad, and the chat downloader live in the on-page panel. All data stored locally on your device.</div>
+  <script src="popup.js"></script>
+</body>
+</html>
