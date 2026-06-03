@@ -2,7 +2,7 @@
 /* Made by SunflowerS at Dreamjourney AI              */
 
 /* ---------- DARK MODE (default) ---------- */
-#djt-panel {
+#djt-panel, .djt-modal-overlay {
   --djt-bg:          rgba(13,12,20,0.94);
   --djt-surface:     rgba(255,255,255,0.04);
   --djt-surface2:    rgba(255,255,255,0.07);
@@ -14,6 +14,9 @@
   --djt-accent:      #a78bfa;
   --djt-accent-dim:  rgba(167,139,250,0.13);
   --djt-accent-bdr:  rgba(167,139,250,0.35);
+  --djt-primary:     #6366f1;
+  --djt-primary-hover: #7c7ff5;
+  --djt-on-primary:  #fff;
   --djt-green:       #22c55e;
   --djt-orange:      #f97316;
   --djt-red:         #ef4444;
@@ -30,7 +33,7 @@
 }
 
 /* ---------- LIGHT MODE ---------- */
-#djt-panel[data-djt-theme="light"] {
+#djt-panel[data-djt-theme="light"], .djt-modal-overlay[data-djt-theme="light"] {
   --djt-bg:          rgba(246,242,255,0.97);
   --djt-surface:     rgba(99,102,241,0.06);
   --djt-surface2:    rgba(99,102,241,0.11);
@@ -42,6 +45,9 @@
   --djt-accent:      #6366f1;
   --djt-accent-dim:  rgba(99,102,241,0.11);
   --djt-accent-bdr:  rgba(99,102,241,0.33);
+  --djt-primary:     #6366f1;
+  --djt-primary-hover: #4f52d6;
+  --djt-on-primary:  #fff;
   --djt-green:       #059669;
   --djt-orange:      #d97706;
   --djt-red:         #dc2626;
@@ -58,7 +64,7 @@
 }
 
 /* ========== SUNFLOWERS SKIN — DARK ========== */
-#djt-panel[data-djt-skin="sunflowers"] {
+#djt-panel[data-djt-skin="sunflowers"], .djt-modal-overlay[data-djt-skin="sunflowers"] {
   --djt-bg:          rgba(28,20,12,0.95);
   --djt-surface:     rgba(157,196,122,0.06);
   --djt-surface2:    rgba(157,196,122,0.11);
@@ -70,6 +76,9 @@
   --djt-accent:      #9DC47A;
   --djt-accent-dim:  rgba(157,196,122,0.14);
   --djt-accent-bdr:  rgba(157,196,122,0.36);
+  --djt-primary:     #5f8048;
+  --djt-primary-hover: #6e9460;
+  --djt-on-primary:  #fff;
   --djt-green:       #9DC47A;
   --djt-orange:      #E8C050;
   --djt-red:         #E0795F;
@@ -86,7 +95,7 @@
 }
 
 /* ========== SUNFLOWERS SKIN — LIGHT ========== */
-#djt-panel[data-djt-skin="sunflowers"][data-djt-theme="light"] {
+#djt-panel[data-djt-skin="sunflowers"][data-djt-theme="light"], .djt-modal-overlay[data-djt-skin="sunflowers"][data-djt-theme="light"] {
   --djt-bg:          rgba(254,249,240,0.96);
   --djt-surface:     rgba(143,175,122,0.10);
   --djt-surface2:    rgba(143,175,122,0.18);
@@ -98,6 +107,9 @@
   --djt-accent:      #4E6E3C;
   --djt-accent-dim:  rgba(78,110,60,0.12);
   --djt-accent-bdr:  rgba(78,110,60,0.36);
+  --djt-primary:     #4E6E3C;
+  --djt-primary-hover: #3f5a30;
+  --djt-on-primary:  #fff;
   --djt-green:       #4E6E3C;
   --djt-orange:      #C8922A;
   --djt-red:         #C0503A;
@@ -183,17 +195,12 @@
   padding: 10px 12px; display: flex; flex-direction: column; gap: 7px;
   max-height: 74vh; overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(167,139,250,0.25) transparent;
+  scrollbar-color: var(--djt-accent-bdr) transparent;
 }
 #djt-body::-webkit-scrollbar { width: 4px; }
 #djt-body::-webkit-scrollbar-track { background: transparent; }
-#djt-body::-webkit-scrollbar-thumb { background: rgba(167,139,250,0.25); border-radius: 4px; }
-#djt-body::-webkit-scrollbar-thumb:hover { background: rgba(167,139,250,0.45); }
-#djt-panel[data-djt-theme="light"] #djt-body {
-  scrollbar-color: rgba(99,102,241,0.3) transparent;
-}
-#djt-panel[data-djt-theme="light"] #djt-body::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.25); }
-#djt-panel[data-djt-theme="light"] #djt-body::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.45); }
+#djt-body::-webkit-scrollbar-thumb { background: var(--djt-accent-bdr); border-radius: 4px; }
+#djt-body::-webkit-scrollbar-thumb:hover { background: var(--djt-accent); }
 
 /* ---------- CARDS ---------- */
 .djt-card {
@@ -284,8 +291,8 @@
 .djt-mini-btn:disabled { opacity: 0.38; cursor: default; }
 .djt-mini-btn.ghost { background: transparent; }
 .djt-mini-btn.full { width:100%; padding:8px; font-weight:600; text-align:center; display:block; }
-.djt-mini-btn.primary { background: rgba(99,102,241,0.82); border-color:transparent; color:#fff; }
-.djt-mini-btn.primary:hover:not(:disabled) { background: #6366f1; }
+.djt-mini-btn.primary { background: var(--djt-primary); border-color:transparent; color: var(--djt-on-primary); }
+.djt-mini-btn.primary:hover:not(:disabled) { background: var(--djt-primary-hover); }
 
 /* ---------- DELETE THINKING BUTTON (inline in chat) ----------
    Self-contained; no CSS vars from #djt-panel (it lives outside the panel)  */
@@ -407,7 +414,8 @@
 .djt-modal-hint { font-size:11px !important; color:var(--djt-muted) !important; font-style:italic; margin-bottom:14px !important; }
 .djt-modal-btns { display:flex; gap:7px; justify-content:flex-end; flex-wrap:wrap; }
 .djt-btn { padding:7px 14px; border-radius:7px; border:none; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; }
-.djt-btn.primary { background:#6366f1; color:#fff; }
+.djt-btn.primary { background:var(--djt-primary); color:var(--djt-on-primary); }
+.djt-btn.primary:hover { background:var(--djt-primary-hover); }
 .djt-btn.ghost { background:var(--djt-btn-bg); color:var(--djt-text); border:1px solid var(--djt-btn-bdr); }
 
 /* ---------- BLOSSOMS ---------- */
@@ -509,6 +517,7 @@
   --lb-green-bdr: rgba(34,197,94,0.30); --lb-orange: #f97316; --lb-orange-dim: rgba(249,115,22,0.10);
   --lb-orange-bdr: rgba(249,115,22,0.30); --lb-red: #ef4444; --lb-red-dim: rgba(239,68,68,0.10);
   --lb-red-bdr: rgba(239,68,68,0.30);
+  --lb-primary: #6366f1; --lb-primary-hover: #7c7ff5; --lb-on-primary: #fff;
 }
 #djt-lb-overlay[data-djt-theme="light"] {
   --lb-bg: rgba(246,242,255,0.98); --lb-surface: rgba(99,102,241,0.06);
@@ -519,6 +528,7 @@
   --lb-green-bdr: rgba(5,150,105,0.27); --lb-orange: #d97706; --lb-orange-dim: rgba(217,119,6,0.08);
   --lb-orange-bdr: rgba(217,119,6,0.27); --lb-red: #dc2626; --lb-red-dim: rgba(220,38,38,0.08);
   --lb-red-bdr: rgba(220,38,38,0.25);
+  --lb-primary: #6366f1; --lb-primary-hover: #4f52d6; --lb-on-primary: #fff;
 }
 /* Sunflowers skin — overlay dark */
 #djt-lb-overlay[data-djt-skin="sunflowers"] {
@@ -530,6 +540,7 @@
   --lb-green-bdr: rgba(157,196,122,0.32); --lb-orange: #E8C050; --lb-orange-dim: rgba(232,192,80,0.10);
   --lb-orange-bdr: rgba(232,192,80,0.30); --lb-red: #E0795F; --lb-red-dim: rgba(224,121,95,0.12);
   --lb-red-bdr: rgba(224,121,95,0.30);
+  --lb-primary: #5f8048; --lb-primary-hover: #6e9460; --lb-on-primary: #fff;
 }
 /* Sunflowers skin — overlay light */
 #djt-lb-overlay[data-djt-skin="sunflowers"][data-djt-theme="light"] {
@@ -541,7 +552,16 @@
   --lb-green-bdr: rgba(78,110,60,0.30); --lb-orange: #C8922A; --lb-orange-dim: rgba(200,146,42,0.10);
   --lb-orange-bdr: rgba(200,146,42,0.30); --lb-red: #C0503A; --lb-red-dim: rgba(192,80,58,0.10);
   --lb-red-bdr: rgba(192,80,58,0.28);
+  --lb-primary: #4E6E3C; --lb-primary-hover: #3f5a30; --lb-on-primary: #fff;
 }
+/* Buttons inside the overlay follow the overlay's own theme (the panel's
+   --djt-* vars don't reach here since the overlay isn't a panel descendant). */
+#djt-lb-overlay .djt-mini-btn {
+  background: var(--lb-surface); border: 1px solid var(--lb-border2); color: var(--lb-text);
+}
+#djt-lb-overlay .djt-mini-btn:hover:not(:disabled) { background: var(--lb-surface2); border-color: var(--lb-accent-bdr); }
+#djt-lb-overlay .djt-mini-btn.primary { background: var(--lb-primary); border-color: transparent; color: var(--lb-on-primary); }
+#djt-lb-overlay .djt-mini-btn.primary:hover:not(:disabled) { background: var(--lb-primary-hover); }
 .djt-lb-modal {
   background: var(--lb-bg); border: 1px solid var(--lb-border2);
   border-radius: 16px; width: 100%; max-width: 560px; max-height: 88vh;
@@ -587,7 +607,7 @@
   font-size: 13px; line-height: 1.8; padding: 10px 13px; background: var(--lb-surface2);
   border: 1px solid var(--lb-border); border-radius: 8px; white-space: pre-wrap; word-break: break-word;
 }
-.djt-lb-hl { background: rgba(167,139,250,0.22); border-bottom: 2px solid var(--lb-accent); border-radius: 3px; padding: 0 2px; color: var(--lb-accent); font-weight: 600; }
+.djt-lb-hl { background: var(--lb-accent-dim); border-bottom: 2px solid var(--lb-accent); border-radius: 3px; padding: 0 2px; color: var(--lb-accent); font-weight: 600; }
 
 .djt-lb-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .djt-lb-badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; border: 1px solid; }
@@ -600,8 +620,8 @@
 .djt-lb-toklabels { display: flex; justify-content: space-between; font-size: 11px; color: var(--lb-muted); margin: 14px 0 5px; }
 .djt-lb-tokval { font-weight: 700; color: var(--lb-text); }
 .djt-lb-toktrack { height: 9px; border-radius: 6px; background: var(--lb-surface2); border: 1px solid var(--lb-border); overflow: hidden; }
-.djt-lb-tokfill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, #a78bfa, #6366f1); transition: width .3s ease; }
-.djt-lb-tokfill.over { background: linear-gradient(90deg, #f97316, #ef4444); }
+.djt-lb-tokfill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--lb-accent-bdr), var(--lb-accent)); transition: width .3s ease; }
+.djt-lb-tokfill.over { background: linear-gradient(90deg, var(--lb-orange), var(--lb-red)); }
 
 .djt-lb-banner { border-radius: 9px; padding: 9px 13px; margin-top: 10px; font-size: 12px; line-height: 1.5; }
 .djt-lb-banner.ok   { background: var(--lb-green-dim);  border: 1px solid var(--lb-green-bdr);  color: var(--lb-green); }
@@ -656,6 +676,11 @@
   background: transparent; border: 1px solid var(--lb-border2); color: var(--lb-muted); font-family: inherit;
 }
 .djt-dm-del:hover { background: var(--lb-red-dim); border-color: var(--lb-red-bdr); color: var(--lb-red); }
+.djt-dm-restore {
+  flex-shrink: 0; font-size: 11px; font-weight: 600; cursor: pointer; padding: 4px 10px; border-radius: 6px;
+  background: var(--lb-accent-dim); border: 1px solid var(--lb-accent-bdr); color: var(--lb-accent); font-family: inherit;
+}
+.djt-dm-restore:hover { background: var(--lb-primary); border-color: transparent; color: var(--lb-on-primary); }
 
 /* ---------- DOWNLOAD BUTTON GROUP (matched look) ---------- */
 .djt-dl-btn {

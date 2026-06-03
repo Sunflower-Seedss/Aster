@@ -1042,6 +1042,7 @@
   function confirmScrollFirstModal() {
     return new Promise(resolve => {
       const ov = document.createElement('div'); ov.className = 'djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
       ov.innerHTML =
         `<div class="djt-modal">` +
         `<h2>Scroll to first message first?</h2>` +
@@ -1062,6 +1063,7 @@
   function confirmVerifyFirstModal(firstText) {
     return new Promise(resolve => {
       const ov = document.createElement('div'); ov.className = 'djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
       const safe = firstText.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
       ov.innerHTML =
         `<div class="djt-modal">` +
@@ -1083,6 +1085,7 @@
   function confirmDownloadModal(firstText) {
     return new Promise(resolve => {
       const ov = document.createElement('div'); ov.className = 'djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
       const safe = firstText.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
       ov.innerHTML =
         `<div class="djt-modal">` +
@@ -1812,6 +1815,17 @@
     } else if (act === 'clearLib') {
       if (!confirm('Delete your entire lorebook library? This cannot be undone.')) return;
       try { chrome.storage.local.set({ 'djt:lb-library': [] }, renderDataManager); } catch (e) { renderDataManager(); }
+    } else if (act === 'restoreBackup') {
+      const key = b.dataset.key;
+      chrome.storage.local.get(key, async d => {
+        const rec = d && d[key]; const bot = rec && rec.bot;
+        if (!bot) { toast('That backup is empty.'); return; }
+        if (!confirm('Populate the bot form that is currently open with this backup? Review it before submitting.')) return;
+        const det = await botGuard(); if (!det) return; // guards bot-page + Legacy, toasts/prompts otherwise
+        const res = await bridgeRequest('import', bot);
+        if (res && res.applied) toast('Restored ' + res.applied.length + ' fields into the form.');
+        else toast('Restore failed: ' + (res && res.error || 'unknown'));
+      });
     } else if (act === 'resetSettings') {
       if (!confirm('Reset all toolkit settings to defaults? Saved data is kept.')) return;
       settings = Object.assign({}, DEFAULT_SETTINGS);
@@ -1846,8 +1860,15 @@
 
       // Sessions
       const sessRows = sessions.map(s => row(escHTML(s.id.slice(0, 8)) + '…', s.rerolls + ' reroll' + (s.rerolls === 1 ? '' : 's') + ' · ' + fmtBytes(s.size), 'delKey', `data-key="${escHTML(s.key)}"`)).join('');
-      // Bot backups
-      const backRows = backups.sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(bk => row(escHTML(bk.name), (bk.ts ? new Date(bk.ts).toLocaleString() : '') + ' · ' + fmtBytes(bk.size), 'delKey', `data-key="${escHTML(bk.key)}"`)).join('');
+      // Bot backups (with Restore + delete)
+      const backRows = backups.sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(bk =>
+        `<div class="djt-dm-row"><div class="djt-dm-rmain">` +
+          `<div class="djt-dm-rname">${escHTML(bk.name)}</div>` +
+          `<div class="djt-dm-rmeta">${(bk.ts ? new Date(bk.ts).toLocaleString() : '')} · ${fmtBytes(bk.size)}</div>` +
+        `</div>` +
+        `<button class="djt-dm-restore" data-act="restoreBackup" data-key="${escHTML(bk.key)}" title="Populate the open bot form from this backup">Restore</button>` +
+        `<button class="djt-dm-del" data-act="delKey" data-key="${escHTML(bk.key)}" title="Delete">×</button>` +
+        `</div>`).join('');
       // Lorebook library
       const libRows = lib.map(l => row(escHTML(l.name || '(unnamed)'), (l.date ? new Date(l.date).toLocaleDateString() : '') + ' · ' + fmtBytes(l.size), 'delLib', `data-idx="${l.i}"`)).join('');
       // Active lorebook
@@ -1913,6 +1934,17 @@
     window.addEventListener('popstate',fire);
     let last=location.href; setInterval(()=>{if(location.href!==last){last=location.href;fire();}},500);
   }
+
+  // Esc closes any open toolkit modal. For the simple removable overlays we
+  // just remove them; for the confirm dialog we click its Cancel so the
+  // awaiting promise resolves cleanly.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const lb = document.getElementById('djt-lb-overlay');
+    if (lb) { lb.remove(); return; }
+    const cm = document.querySelector('.djt-modal-overlay');
+    if (cm) { const cancel = cm.querySelector('[data-v="cancel"]'); if (cancel) cancel.click(); else cm.remove(); }
+  });
 
   setupDelegation(); setupRouteWatcher(); onRouteChange();
 })();
