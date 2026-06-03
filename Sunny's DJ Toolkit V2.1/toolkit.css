@@ -623,6 +623,40 @@
 .djt-lb-empty { color: var(--lb-muted); font-size: 13px; text-align: center; padding: 16px 0; }
 .djt-lb-foot { font-size: 11px; color: var(--lb-muted); margin-top: 12px; line-height: 1.5; }
 
+/* ---------- DATA MANAGER ---------- */
+.djt-dm-total { font-size: 12px; color: var(--lb-soft); margin-bottom: 12px; }
+.djt-dm-total b { color: var(--lb-accent); }
+.djt-dm-sec { margin-bottom: 16px; }
+.djt-dm-sechead {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; font-weight: 700; color: var(--lb-text);
+  padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--lb-border);
+}
+.djt-dm-secright { display: flex; align-items: center; gap: 8px; }
+.djt-dm-size { font-size: 11px; font-weight: 400; color: var(--lb-muted); }
+.djt-dm-ct {
+  display: inline-block; min-width: 16px; text-align: center; font-size: 10px;
+  background: var(--lb-surface2); color: var(--lb-soft); border-radius: 9px; padding: 1px 6px; margin-left: 5px;
+}
+.djt-dm-clear {
+  font-size: 11px; font-weight: 600; cursor: pointer; padding: 3px 10px; border-radius: 6px;
+  background: var(--lb-red-dim); border: 1px solid var(--lb-red-bdr); color: var(--lb-red); font-family: inherit;
+}
+.djt-dm-clear:hover { background: var(--lb-red); color: #fff; }
+.djt-dm-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 2px;
+  border-bottom: 1px solid var(--lb-border);
+}
+.djt-dm-row:last-child { border-bottom: none; }
+.djt-dm-rmain { flex: 1; min-width: 0; }
+.djt-dm-rname { font-size: 12px; color: var(--lb-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.djt-dm-rmeta { font-size: 10px; color: var(--lb-muted); margin-top: 1px; }
+.djt-dm-del {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 6px; cursor: pointer; font-size: 14px; line-height: 1;
+  background: transparent; border: 1px solid var(--lb-border2); color: var(--lb-muted); font-family: inherit;
+}
+.djt-dm-del:hover { background: var(--lb-red-dim); border-color: var(--lb-red-bdr); color: var(--lb-red); }
+
 /* ---------- DOWNLOAD BUTTON GROUP (matched look) ---------- */
 .djt-dl-btn {
   text-align: center;

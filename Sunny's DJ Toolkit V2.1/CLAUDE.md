@@ -200,6 +200,10 @@ Only applies to Nyx and Athena models. Defaulting it ON would confuse users on a
 - **HTML pages** (help / creator-tools-help / lorebook-studio): each defines `[data-skin="sunflowers"]` + `[data-skin="sunflowers"][data-theme="light"]` variable blocks plus retints for hardcoded hero/card/footer surfaces, and hides the DJ `body::before` bg image. **help.js** reads `djt:settings.skin` from `chrome.storage.local` and applies `data-skin` (cached in `localStorage` as `djt-help-skin`), so the pages match whatever skin is active in the panel.
 - **Cross-page nav**: each HTML page has a `.page-nav` bar linking to the other two (current page shown as a non-link "here" chip).
 
+## Data manager (Advanced footer → "🗄️ Manage saved data")
+
+`openDataManager()` opens a modal (reuses `#djt-lb-overlay`) that lists everything the toolkit has in `chrome.storage.local`, grouped by category with item counts and byte sizes, and offers **per-item delete + per-category Clear all**. Categories are derived from key prefixes: `djt:<sessionId>` → Session data (rerolls/stats/scratchpad), `djt:botbackup:<botId>` → Bot backups, `djt:lb-library` → Lorebook library (per-item = array index), `djt:lorebook` → Active lorebook, `djt:settings` → Toolkit settings (Reset-to-defaults only, never auto-deleted). Clicks are delegated on `#djt-dm-body` (`onDataManagerClick`) so the listener survives re-renders; destructive actions confirm() first. Styles are `.djt-dm-*` (scoped under the overlay, using `--lb-*` tokens).
+
 ## CSP constraints (extension pages)
 
 Extension pages (help.html etc.) run under MV3 CSP. This means:
