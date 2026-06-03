@@ -1,4 +1,4 @@
-// Sunny's Dreamjourney Toolkit V1 - popup
+// Sunny's Dreamjourney Toolkit V2 - popup
 // Made by SunflowerS at Dreamjourney AI
 
 function nexusClass(n) { return n <= 20 ? 'green' : n <= 40 ? 'orange' : 'red'; }
@@ -37,7 +37,7 @@ async function load() {
     document.getElementById('p-warn').style.display = nexus >= 50 ? 'block' : 'none';
     document.getElementById('btn-export').addEventListener('click', function () {
       var lines = [
-        "Sunny's Dreamjourney Toolkit V1 — Session Stats",
+        "Sunny's Dreamjourney Toolkit V2 Session Stats",
         'Made by SunflowerS at Dreamjourney AI',
         'Session: ' + sessionId,
         'Exported: ' + new Date().toLocaleString(),
