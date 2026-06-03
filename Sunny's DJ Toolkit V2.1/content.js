@@ -57,6 +57,8 @@
   // ---- url helpers --------------------------------------------
   const isSessionUrl = () => /\/app\/session\/[^/]+/.test(location.pathname);
   const sessionIdFromUrl = () => { const m = location.pathname.match(/\/app\/session\/([^/?#]+)/); return m ? m[1] : null; };
+  const isBotPage = () => /\/app\/create\/bot\//.test(location.pathname);
+  const botIdFromUrl = () => { const m = location.pathname.match(/\/app\/create\/bot\/([^/?#]+)/); return m ? m[1] : 'new'; };
 
   // ---- DOM helpers --------------------------------------------
   const getContainer = () => document.querySelector('.scrollchatmessages');
@@ -1341,8 +1343,9 @@
           `<div class="djt-card">` +
             cardH('Bot Tools', 'bottools') +
             `<div class="djt-card-body">` +
-              `<button class="djt-mini-btn full" disabled style="margin-bottom:6px">Export bot (coming soon)</button>` +
-              `<button class="djt-mini-btn full" disabled>Import bot (coming soon)</button>` +
+              `<button id="djt-bot-export-btn" class="djt-mini-btn full primary" style="margin-bottom:6px">📤 Export bot</button>` +
+              `<button id="djt-bot-import-btn" class="djt-mini-btn full" style="margin-bottom:6px">📥 Import bot</button>` +
+              `<div id="djt-bot-status-line" class="djt-tool-note" style="text-align:center">Open a bot page to auto-back-up.</div>` +
             `</div>` +
           `</div>` +
 
@@ -1452,6 +1455,8 @@
     document.getElementById('djt-creator-help-btn').addEventListener('click', () => {
       try { window.open(chrome.runtime.getURL('creator-tools-help.html'), '_blank'); } catch(e) { toast('Could not open help page.'); }
     });
+    document.getElementById('djt-bot-export-btn').addEventListener('click', openBotExport);
+    document.getElementById('djt-bot-import-btn').addEventListener('click', openBotImport);
     document.getElementById('djt-lb-load-btn').addEventListener('click', openLoadLorebookModal);
     document.getElementById('djt-lb-tester-btn').addEventListener('click', openMessageTester);
     document.getElementById('djt-scan-btn').addEventListener('click', () => setScanner(!scanActive));
@@ -1510,15 +1515,15 @@
   }
 
   // ---- TABS --------------------------------------------------
-  function switchTab(tab) {
-    settings.activeTab = tab || 'chat';
-    saveSettings();
+  function switchTab(tab, noSave) {
+    const t = tab || 'chat';
+    if (!noSave) { settings.activeTab = t; saveSettings(); }
     const chatPane    = document.getElementById('djt-tab-chat');
     const creatorPane = document.getElementById('djt-tab-creator');
-    if (chatPane)    chatPane.style.display    = settings.activeTab === 'chat'    ? '' : 'none';
-    if (creatorPane) creatorPane.style.display = settings.activeTab === 'creator' ? '' : 'none';
+    if (chatPane)    chatPane.style.display    = t === 'chat'    ? '' : 'none';
+    if (creatorPane) creatorPane.style.display = t === 'creator' ? '' : 'none';
     [...document.querySelectorAll('#djt-tabs .djt-tab')].forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.tab === settings.activeTab);
+      btn.classList.toggle('active', btn.dataset.tab === t);
     });
   }
 
@@ -1555,6 +1560,210 @@
     if(!settings.saveRegens){const regen=document.getElementById('djt-regen');if(regen)regen.style.display='none';}
   }
 
+  // ---- BOT EXPORT / IMPORT (bot create & edit pages) ---------
+  // Bridge lives in the page's MAIN world (dj-bridge.js) so it can reach
+  // react-hook-form. We talk to it over window.postMessage.
+  let bridgeInjected = false;
+  const bridgePending = {};
+  let bridgeReqId = 0;
+  let botAutosaveTimer = null;
+  let botBackupMeta = null; // {ts, botId}
+  let botMode = false;
+
+  function injectBotBridge() {
+    if (bridgeInjected) return;
+    bridgeInjected = true;
+    try {
+      const s = document.createElement('script');
+      s.src = chrome.runtime.getURL('dj-bridge.js');
+      s.onload = () => s.remove();
+      (document.head || document.documentElement).appendChild(s);
+    } catch (e) { bridgeInjected = false; }
+  }
+
+  window.addEventListener('message', ev => {
+    if (ev.source !== window) return;
+    const d = ev.data;
+    if (!d || d.source !== 'djt-bridge') return;
+    if (d.ready) return;
+    const cb = bridgePending[d.reqId];
+    if (cb) { delete bridgePending[d.reqId]; cb(d.result); }
+  });
+
+  function bridgeRequest(action, payload) {
+    return new Promise(resolve => {
+      injectBotBridge();
+      const reqId = ++bridgeReqId;
+      bridgePending[reqId] = resolve;
+      // Give the freshly-injected bridge a beat to register its listener.
+      const send = () => window.postMessage({ source: 'djt-cs', action, payload, reqId }, '*');
+      send(); setTimeout(send, 120);
+      setTimeout(() => { if (bridgePending[reqId]) { delete bridgePending[reqId]; resolve({ error: 'timeout' }); } }, 2500);
+    });
+  }
+
+  // Guard used by both buttons: ensures we're on a usable Legacy bot form.
+  async function botGuard() {
+    if (!isBotPage()) { toast('Open a bot creation or edit page first.'); return null; }
+    const det = await bridgeRequest('detect');
+    if (!det || det.error) { toast('Could not reach the bot form. Reload the page.'); return null; }
+    if (!det.hasForm || !det.legacyReady) { openLegacyPrompt(); return null; }
+    return det;
+  }
+
+  function openLegacyPrompt() {
+    if (document.getElementById('djt-lb-overlay')) return;
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head"><span class="djt-lb-title">⚠️ Switch to Legacy</span>` +
+          `<button class="djt-lb-x" id="djt-bot-x" title="Close">✕</button></div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-msg" style="display:block;font-size:13px;line-height:1.6">` +
+            `Bot export &amp; import only work in <b>Legacy</b> mode, where every field is on one page.<br><br>` +
+            `Flip the <b>Legacy / Modern</b> toggle at the top-right of the bot page to <b>Legacy</b>, then try again.` +
+          `</div>` +
+          `<div class="djt-lb-row"><button class="djt-mini-btn primary" id="djt-bot-ok">Got it</button></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    document.getElementById('djt-bot-x').addEventListener('click', close);
+    document.getElementById('djt-bot-ok').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  }
+
+  function botEnvelope(bot) {
+    return JSON.stringify({
+      _type: 'dreamjourney-bot',
+      _toolkit: "Sunny's DJ Toolkit V2.1",
+      _exportedAt: new Date().toISOString(),
+      bot
+    }, null, 2);
+  }
+
+  async function openBotExport() {
+    const det = await botGuard(); if (!det) return;
+    const res = await bridgeRequest('export');
+    if (!res || res.error || !res.bot) { toast('Export failed: ' + (res && res.error || 'no data')); return; }
+    const json = botEnvelope(res.bot);
+    const name = (res.bot.name || 'bot').replace(/[^\w\-]+/g, '_').slice(0, 40) || 'bot';
+    if (document.getElementById('djt-lb-overlay')) document.getElementById('djt-lb-overlay').remove();
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head"><span class="djt-lb-title">📤 Export bot</span>` +
+          `<button class="djt-lb-x" id="djt-bot-x" title="Close">✕</button></div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-step">A complete copy of this bot, including dropdowns &amp; toggles.</div>` +
+          `<textarea id="djt-bot-ta" class="djt-lb-ta mono" readonly></textarea>` +
+          `<div class="djt-lb-row">` +
+            `<button class="djt-mini-btn primary" id="djt-bot-copy">Copy</button>` +
+            `<button class="djt-mini-btn" id="djt-bot-dl">Download .json</button>` +
+            `<button class="djt-mini-btn" id="djt-bot-close2">Close</button>` +
+          `</div>` +
+          `<div id="djt-bot-status" class="djt-lb-msg"></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    document.getElementById('djt-bot-ta').value = json;
+    const close = () => ov.remove();
+    document.getElementById('djt-bot-x').addEventListener('click', close);
+    document.getElementById('djt-bot-close2').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    const stat = m => { const s = document.getElementById('djt-bot-status'); if (s) { s.style.display = 'block'; s.textContent = m; } };
+    document.getElementById('djt-bot-copy').addEventListener('click', () => {
+      navigator.clipboard.writeText(json).then(() => stat('Copied to clipboard.'), () => stat('Copy failed.'));
+    });
+    document.getElementById('djt-bot-dl').addEventListener('click', () => {
+      try {
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'djt-bot-' + name + '.json';
+        a.click(); URL.revokeObjectURL(url); stat('Downloaded djt-bot-' + name + '.json');
+      } catch (e) { stat('Download failed.'); }
+    });
+  }
+
+  async function openBotImport() {
+    const det = await botGuard(); if (!det) return;
+    if (document.getElementById('djt-lb-overlay')) document.getElementById('djt-lb-overlay').remove();
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head"><span class="djt-lb-title">📥 Import bot</span>` +
+          `<button class="djt-lb-x" id="djt-bot-x" title="Close">✕</button></div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-step">Paste a bot file (or pick one) to fill this page's fields.</div>` +
+          `<input type="file" id="djt-bot-file" accept="application/json,.json" style="margin-bottom:8px;font-size:12px;color:var(--lb-soft)">` +
+          `<textarea id="djt-bot-ta" class="djt-lb-ta mono" placeholder="Paste exported bot JSON here..."></textarea>` +
+          `<div class="djt-lb-row">` +
+            `<button class="djt-mini-btn primary" id="djt-bot-apply">Populate bot</button>` +
+            `<button class="djt-mini-btn" id="djt-bot-close2">Cancel</button>` +
+          `</div>` +
+          `<div id="djt-bot-status" class="djt-lb-msg"></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    document.getElementById('djt-bot-x').addEventListener('click', close);
+    document.getElementById('djt-bot-close2').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    const stat = (m, err) => { const s = document.getElementById('djt-bot-status'); if (s) { s.style.display = 'block'; s.textContent = m; s.style.color = err ? 'var(--lb-red)' : ''; } };
+    document.getElementById('djt-bot-file').addEventListener('change', e => {
+      const f = e.target.files && e.target.files[0]; if (!f) return;
+      const r = new FileReader(); r.onload = () => { document.getElementById('djt-bot-ta').value = r.result; stat('Loaded ' + f.name + '. Click Populate bot.'); }; r.readAsText(f);
+    });
+    document.getElementById('djt-bot-apply').addEventListener('click', async () => {
+      const raw = document.getElementById('djt-bot-ta').value.trim();
+      if (!raw) { stat('Paste a bot file first.', true); return; }
+      let parsed; try { parsed = JSON.parse(raw); } catch (e) { stat('Invalid JSON: ' + e.message, true); return; }
+      const bot = (parsed && parsed.bot && typeof parsed.bot === 'object') ? parsed.bot : parsed;
+      if (!bot || typeof bot !== 'object' || (!bot.name && !bot.instructions && !bot.description)) {
+        stat('That does not look like a bot export.', true); return;
+      }
+      stat('Populating...');
+      const res = await bridgeRequest('import', bot);
+      if (!res || res.error) { stat('Import failed: ' + (res && res.error || 'unknown'), true); return; }
+      const n = (res.applied || []).length;
+      const hasImg = bot.img_link ? ' The image link was set; if the page still asks for an image, re-pick it manually.' : '';
+      stat('✓ Filled ' + n + ' field' + (n === 1 ? '' : 's') + '.' + hasImg);
+      toast('Bot fields populated (' + n + ').');
+    });
+  }
+
+  // Rolling local backup while editing, so work is never lost mid-create.
+  function startBotAutosave() {
+    stopBotAutosave();
+    const tick = async () => {
+      if (!isBotPage()) return;
+      const det = await bridgeRequest('detect');
+      if (!det || !det.hasForm || !det.legacyReady) { updateBotStatus('legacy'); return; }
+      const res = await bridgeRequest('export');
+      if (res && res.bot) {
+        const botId = botIdFromUrl();
+        botBackupMeta = { ts: Date.now(), botId };
+        try { chrome.storage.local.set({ ['djt:botbackup:' + botId]: { ts: botBackupMeta.ts, bot: res.bot } }); } catch (e) {}
+        updateBotStatus('ok');
+      }
+    };
+    tick();
+    botAutosaveTimer = setInterval(tick, 5000);
+  }
+  function stopBotAutosave() { if (botAutosaveTimer) { clearInterval(botAutosaveTimer); botAutosaveTimer = null; } }
+
+  function updateBotStatus(state) {
+    const el = document.getElementById('djt-bot-status-line'); if (!el) return;
+    if (state === 'legacy') { el.textContent = 'Switch to Legacy mode to back up.'; el.style.color = 'var(--djt-orange)'; }
+    else if (state === 'ok' && botBackupMeta) {
+      const t = new Date(botBackupMeta.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      el.textContent = 'Backed up locally ✓ ' + t; el.style.color = 'var(--djt-green)';
+    } else if (state === 'offpage') { el.textContent = 'Open a bot page to auto-back-up.'; el.style.color = 'var(--djt-muted)'; }
+  }
+
   // ---- LIFECYCLE --------------------------------------------
   async function activate(sid) {
     currentSessionId=sid; active=true; hasScrolledToTop=false;
@@ -1567,8 +1776,20 @@
     refreshStatsUI(); refreshRegenPanel(); refreshThinkingButtons(); maybeOfferRestore(); maybeStartScanner();
     if(!scratchpadInterval) scratchpadInterval=setInterval(()=>{ if(active){hookScratchpad();refreshThinkingButtons();if(scanActive)runChatScan();} },3000);
   }
+  // Bot create/edit pages: build the panel (Creator tab) without chat wiring.
+  async function activateBotMode() {
+    active=true; botMode=true; currentSessionId=null;
+    await loadAll();
+    if(!isBotPage()) return;
+    await waitFor(()=>document.querySelector('input[name="name"]')||document.querySelector('main'),15000,250);
+    if(!isBotPage()) return;
+    buildPanel(); setTheme(settings.theme); setSkin(settings.skin); syncToggleStates(); applyVisibility();
+    switchTab('creator', true); applyAllCardCollapses();
+    injectBotBridge(); startBotAutosave();
+  }
   function deactivate() {
-    active=false; hasScrolledToTop=false;
+    active=false; botMode=false; stopBotAutosave();
+    hasScrolledToTop=false;
     if(containerObserver){containerObserver.disconnect();containerObserver=null;}
     if(scratchpadInterval){clearInterval(scratchpadInterval);scratchpadInterval=null;}
     clearTimeout(statsDebounce); clearTimeout(thinkingDebounce); clearTimeout(panelUpdateTo); clearTimeout(panelDebounce);
@@ -1580,7 +1801,11 @@
     const ex=[...document.querySelectorAll('.djt-del-thinking')];if(ex.length){djtMutating=true;ex.forEach(b=>b.remove());djtMutating=false;}
     expectingReply=false;regenPending=false;regenTargetIdx=-1;regenAnchorUserId=null;previewIndex=null;currentSessionId=null;
   }
-  function onRouteChange(){const sid=isSessionUrl()?sessionIdFromUrl():null;if(sid&&sid===currentSessionId&&active)return;if(!sid){if(active)deactivate();return;}if(active)deactivate();activate(sid);}
+  function onRouteChange(){
+    if(isSessionUrl()){const sid=sessionIdFromUrl();if(sid&&sid===currentSessionId&&active&&!botMode)return;if(active)deactivate();activate(sid);return;}
+    if(isBotPage()){if(active&&botMode){updateBotStatus('ok');return;}if(active)deactivate();activateBotMode();return;}
+    if(active)deactivate();
+  }
   function setupRouteWatcher(){
     const fire=()=>{try{onRouteChange();}catch(e){}};
     const wrap=orig=>function(){const r=orig.apply(this,arguments);fire();return r;};

@@ -18,9 +18,30 @@ A Chromium extension (Manifest V3) that injects a floating panel into DreamJourn
 - **help.html + help.js** — help page opened in new tab (help.js is external because inline scripts are blocked by extension CSP)
 - **lorebook-studio.html + lorebook-studio.js** — standalone tabbed tool page (Merge / Wrap All Triggers / Wrap a Snippet / Remove Wrapping / Format Checker), opened from Creator Tools → Tool Pages. Reuses help.js for theme toggle. Logic lives in **lorebook-studio.js** (external file — extension-page CSP blocks inline `<script>`; an inline block here is exactly why only the first tab worked in an earlier build). Wrap/merge behaviors ported verbatim from the original standalone tools (Merger, Cascade Destroyer, Cascade Buster, Recascadanator). Format Checker validates a pasted lorebook against DreamJourney's required shape (top-level + per-entry fields, every entry must have ≥1 `keyText` trigger) and lists issues by entry name.
 - **creator-tools-help.html** — plain-language explainer for the in-extension Creator tools (Load Lorebook, Message Tester, Active Chat Scanner, Active Chat Panel) and Lorebook Studio. Opened from the Creator Tools "? How to use" button. Reuses help.js.
-- **manifest.json** — MV3, matches both `dreamjourneyai.com/*` and `www.dreamjourneyai.com/*`. Name "Sunny's Dreamjourney Toolkit V2", version 2.1.
+- **dj-bridge.js** — MAIN-world helper injected on bot create/edit pages. Reaches React / react-hook-form to read & write the bot. See "Bot export / import" below.
+- **manifest.json** — MV3, matches both `dreamjourneyai.com/*` and `www.dreamjourneyai.com/*`. Name "Sunny's Dreamjourney Toolkit V2", version 2.1. `dj-bridge.js` is a `web_accessible_resource`.
 
-DreamJourney is a **Next.js SPA**. Content scripts only inject on real page loads. Route changes are detected by patching `history.pushState/replaceState` + popstate + 500ms polling. The `activate(sessionId)` / `deactivate()` lifecycle handles session switching.
+DreamJourney is a **Next.js SPA**. Content scripts only inject on real page loads. Route changes are detected by patching `history.pushState/replaceState` + popstate + 500ms polling. The lifecycle has two modes: `activate(sessionId)` for `/app/session/*` (chat panel) and `activateBotMode()` for `/app/create/bot/*` (panel on Creator tab, no chat wiring). `deactivate()` tears either down. `onRouteChange()` routes between them; `botMode` flag distinguishes.
+
+---
+
+## Bot export / import (Creator → Bot Tools)
+
+Lets a user capture a complete, re-importable copy of a bot — every text field **and** the custom dropdowns/toggles (visibility, NSFW, content warnings, category, tags, lorebooks).
+
+**How it works (the key insight):** DreamJourney's bot create/edit form is a **react-hook-form**. Its `control._formValues` holds the entire bot model, and the same component props expose `setValue` / `getValues` / `trigger`. So:
+- **Export** = read `getValues()`, keep a whitelist of bot fields (drop `id/userId/createdAt/updatedAt/messageCount/isDraft/user/collaborators/imgsrc`). No DOM scraping.
+- **Import** = `setValue(field, value, {shouldDirty,shouldTouch})` per field + `trigger()`. RHF repopulates the visible UI (including dropdowns/toggles) and DreamJourney autosaves it.
+
+**Why a MAIN-world bridge:** content scripts run in an isolated world and can't see the page's React fiber (`__reactFiber$…` expandos). `dj-bridge.js` is injected into the page's MAIN world (`<script src=getURL(...)>`); content.js talks to it via `window.postMessage` (`source:'djt-cs'` ⇄ `source:'djt-bridge'`, matched by `reqId`). Bridge actions: `detect`, `export`, `import`.
+
+**Legacy requirement:** the feature only works in **Legacy** mode, where the form is one long scrolling page with every field mounted. Modern is a 5-step wizard that unmounts other steps, so `setValue`/the fiber walk can't reach all fields. `detect` reports `legacyReady` (checks `textarea[name=context]` + `textarea[name=authorNote]` + `input[name=name]` all present); if not, `openLegacyPrompt()` tells the user to flip the toggle.
+
+**New & existing bots are the same code path:** typing into `/app/create/bot/new` makes DreamJourney mint a draft and redirect to `/app/create/bot/<uuid>` — identical form/model to editing an existing bot.
+
+**Rolling local backup:** while on a bot page, `startBotAutosave()` snapshots `export` to `chrome.storage.local` under `djt:botbackup:<botId>` every 5s and shows "Backed up locally ✓ HH:MM" in the card.
+
+**Field shapes (for reference):** `tags` = array of UUID strings; `lorebooks` = `[{id}]`; `lorebookIds` = array of numbers; `categoryId`/`visibility` = strings; `contentWarnings` = string array; `nsfw`/`pinned` = booleans; `img_link` = CDN URL (re-import sets the link, but DreamJourney may still require re-picking the image file since `imgsrc`/the File blob can't be serialized).
 
 ---
 

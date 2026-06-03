@@ -72,6 +72,9 @@
 
   .tip { background:rgba(99,102,241,0.07); border:1px solid rgba(99,102,241,0.16); border-radius:9px; padding:9px 13px; margin-top:10px; font-size:12px; color:var(--soft); display:flex; gap:8px; line-height:1.5; }
   .tip-icon { flex-shrink:0; }
+  .tip-warn { background:rgba(217,119,6,0.08); border-color:rgba(217,119,6,0.28); }
+  [data-skin="sunflowers"] .tip-warn { background:rgba(212,168,50,0.10); border-color:rgba(212,168,50,0.30); }
+  code { font-family:ui-monospace, monospace; font-size:0.92em; background:var(--surface); padding:1px 5px; border-radius:4px; }
   .swatch { display:inline-block; padding:0 4px; border-radius:3px; background:rgba(167,139,250,0.30); text-decoration:underline; text-decoration-color:#a78bfa; text-decoration-thickness:2px; color:inherit; font-weight:600; }
 
   .footer-wrap { max-width:660px; margin:36px auto 0; border-top:1px solid rgba(255,255,255,0.08); padding:30px 20px 44px; text-align:center; background:rgba(13,12,20,0.76); backdrop-filter:blur(4px); }
@@ -135,6 +138,23 @@
   <p class="intro">These tools help you understand and fix your lorebooks. Take your time, there's no rush, and nothing here changes your lorebook on its own. You're always the one who decides what to keep.</p>
   <p class="intro">First, a quick reminder of the golden rule: the model can only load <strong>1500 tokens</strong> of lorebook content per message. When too much triggers at once, the rest gets cut and the bot starts making things up. These tools help you see and control that.</p>
   <p class="intro"><strong>Pinned entries count against this budget too.</strong> They load first, so if your pinned entries fill the 1500 tokens, no other entries will be counted at all. Keep pinned entries lean.</p>
+
+  <div class="section-label">Bot Tools</div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">📤</div><div class="card-title">Export &amp; Import a bot</div></div>
+    <div class="card-body">
+      <p>Make a complete, reusable copy of a bot: every field <em>and</em> the dropdowns and toggles (visibility, NSFW, content warnings, category, tags, lorebooks). Use it as a backup, to clone a bot, or to move one between accounts.</p>
+      <div class="tip tip-warn"><span class="tip-icon">⚠️</span><span>This only works in <strong>Legacy</strong> mode. On the bot page, set the <strong>Legacy / Modern</strong> toggle (top-right) to <strong>Legacy</strong> first. In Modern mode the fields live on separate wizard steps, so the toolkit cannot see them all at once. If you try while in Modern, it will remind you to switch.</span></div>
+      <ol class="steps">
+        <li>Open a bot's create or edit page on DreamJourney and switch to <strong>Legacy</strong>.</li>
+        <li>While you work, the panel quietly keeps a local backup ("Backed up locally ✓"). Nothing is uploaded.</li>
+        <li><strong>Export bot</strong> shows the full bot as a file. Copy it, or download the <code>.json</code>.</li>
+        <li><strong>Import bot</strong> on any bot page: paste or pick a file, then <strong>Populate bot</strong>. Every field, dropdown and toggle is filled in for you.</li>
+      </ol>
+      <div class="tip"><span class="tip-icon">🖼️</span><span>The image link is saved, but DreamJourney may still ask you to re-pick the picture file after an import. Everything else is restored automatically.</span></div>
+    </div>
+  </div>
 
   <div class="section-label">In-extension tools</div>
 
