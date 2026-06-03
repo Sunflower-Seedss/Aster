@@ -1821,6 +1821,9 @@
         const rec = d && d[key]; const bot = rec && rec.bot;
         if (!bot) { toast('That backup is empty.'); return; }
         if (!confirm('Populate the bot form that is currently open with this backup? Review it before submitting.')) return;
+        // Close the data manager first so botGuard's Legacy prompt (which reuses
+        // #djt-lb-overlay) can show if we're not on a usable Legacy bot form.
+        const ov = document.getElementById('djt-lb-overlay'); if (ov) ov.remove();
         const det = await botGuard(); if (!det) return; // guards bot-page + Legacy, toasts/prompts otherwise
         const res = await bridgeRequest('import', bot);
         if (res && res.applied) toast('Restored ' + res.applied.length + ' fields into the form.');
