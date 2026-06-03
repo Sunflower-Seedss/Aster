@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sunny's Dreamjourney Toolkit — How It Works</title>
+<title>Sunny's Dreamjourney Toolkit: How It Works</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -17,6 +17,19 @@
     --border-hover: rgba(99,102,241,0.35); --text: #1e1b4b; --soft: #374151; --muted: #9ca3af;
     --accent: #6366f1; --card-shadow: 0 2px 12px rgba(99,102,241,0.08);
   }
+  /* Sunflowers skin — dark */
+  [data-skin="sunflowers"] {
+    --bg: #130E08; --surface: rgba(157,196,122,0.06); --border: rgba(157,196,122,0.15);
+    --border-hover: rgba(157,196,122,0.35); --text: #F0E8D8; --soft: #C8B89A; --muted: #C4A882;
+    --accent: #9DC47A; --card-shadow: none;
+  }
+  /* Sunflowers skin — light */
+  [data-skin="sunflowers"][data-theme="light"] {
+    --bg: #EFE8D8; --surface: rgba(143,175,122,0.10); --border: rgba(143,175,122,0.28);
+    --border-hover: rgba(78,110,60,0.40); --text: #332820; --soft: #5C4433; --muted: #7A5C3E;
+    --accent: #4E6E3C; --card-shadow: 0 2px 12px rgba(122,92,62,0.10);
+  }
+  [data-skin="sunflowers"] body::before { display: none; }
 
   body {
     background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, sans-serif;
@@ -46,6 +59,14 @@
   /* theme toggle */
   .theme-btn { position: absolute; top: 16px; right: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 14px; cursor: pointer; color: var(--text); transition: background 0.15s; }
   .theme-btn:hover { background: var(--border); }
+
+  /* cross-page nav */
+  .page-nav { max-width:660px; margin:18px auto 0; padding:0 20px; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; position:relative; z-index:1; }
+  .page-nav a, .page-nav-here { font-size:12px; font-weight:700; padding:7px 14px; border-radius:20px; text-decoration:none; border:1px solid var(--border); }
+  .page-nav a { background:var(--surface); color:var(--accent); transition:background .15s, border-color .15s; }
+  .page-nav a:hover { background:var(--border); border-color:var(--border-hover); }
+  .page-nav-here { background:var(--accent); color:#fff; border-color:transparent; }
+  [data-theme="light"] .page-nav-here { color:#fff; }
 
   main { max-width: 660px; margin: 0 auto; padding: 28px 20px 0; }
   .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 24px 0 10px; padding-left: 2px; opacity: 0.9; }
@@ -105,6 +126,40 @@
   .profile-link:hover { background: rgba(167,139,250,0.22); border-color: rgba(167,139,250,0.5); }
   [data-theme="light"] .profile-link:hover { background: rgba(99,102,241,0.18); }
   .footer-data { font-size: 11px; color: var(--muted); margin-top: 18px; opacity: 0.7; }
+
+  /* Sunflowers skin — elegant serif headings (falls back gracefully without the web font) */
+  [data-skin="sunflowers"] h1 { font-family: 'Cormorant Garamond', Georgia, 'Times New Roman', serif; font-weight: 700; letter-spacing: 0.01em; }
+  [data-skin="sunflowers"] .card-title { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16px; font-weight: 700; }
+
+  /* Sunflowers skin — retint hardcoded surfaces */
+  [data-skin="sunflowers"] .hero { background: rgba(28,20,12,0.82); border-bottom-color: rgba(157,196,122,0.20); }
+  [data-skin="sunflowers"][data-theme="light"] .hero { background: rgba(254,249,240,0.86); border-bottom-color: rgba(78,110,60,0.20); }
+  [data-skin="sunflowers"] .card { background: rgba(28,20,12,0.82); border-color: rgba(157,196,122,0.16); }
+  [data-skin="sunflowers"][data-theme="light"] .card { background: rgba(254,249,240,0.88); border-color: rgba(78,110,60,0.16); }
+  [data-skin="sunflowers"] .card-icon { background: rgba(157,196,122,0.12); border-color: rgba(157,196,122,0.24); }
+  [data-skin="sunflowers"][data-theme="light"] .card-icon { background: rgba(78,110,60,0.10); border-color: rgba(78,110,60,0.22); }
+  [data-skin="sunflowers"] .footer-wrap { background: rgba(28,20,12,0.80); }
+  [data-skin="sunflowers"][data-theme="light"] .footer-wrap { background: rgba(254,249,240,0.84); }
+  [data-skin="sunflowers"] .tip { background: rgba(157,196,122,0.08); border-color: rgba(157,196,122,0.18); }
+  [data-skin="sunflowers"] .profile-link { background: rgba(157,196,122,0.12); border-color: rgba(157,196,122,0.34); }
+
+  /* ---------- MOBILE ---------- */
+  @media (max-width: 560px) {
+    body { font-size: 13.5px; }
+    .hero { padding: 26px 16px 20px; }
+    .hero-icon { width: 44px; height: 44px; }
+    h1 { font-size: 19px; }
+    .theme-btn { top: 12px; right: 12px; }
+    .page-nav { padding: 0 14px; gap: 6px; }
+    .page-nav a, .page-nav-here { font-size: 11px; padding: 6px 11px; }
+    main { padding: 22px 14px 0; }
+    .card { padding: 15px 16px; }
+    .card-head { gap: 9px; }
+    .card-icon { width: 30px; height: 30px; font-size: 15px; }
+    .nexus-pills { gap: 6px; }
+    .footer-wrap { padding: 28px 16px 38px; }
+    .footer-chibi { width: 80px; height: 80px; }
+  }
 </style>
 </head>
 <body>
@@ -112,12 +167,26 @@
 <div class="hero">
   <button class="theme-btn" id="theme-toggle" title="Toggle light / dark mode">☀️</button>
   <img src="icons/sun64.png" class="hero-icon" alt="">
-  <h1>Sunny's Dreamjourney Toolkit V1</h1>
+  <h1>Sunny's Dreamjourney Toolkit V2</h1>
   <div class="hero-sub">Made by <span>SunflowerS at Dreamjourney AI</span></div>
 </div>
 
+<nav class="page-nav">
+  <span class="page-nav-here">Chat Tools help</span>
+  <a href="creator-tools-help.html">Creator Tools help</a>
+  <a href="lorebook-studio.html">Lorebook Studio</a>
+</nav>
+
 <main>
-  <div class="section-label">Features</div>
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-head"><div class="card-icon">🗂️</div><div class="card-title">Two tabs &amp; collapsible cards</div></div>
+    <div class="card-body">
+      <p>The panel has two tabs at the top: <strong>Chat Tools</strong> (everything below) and <strong>Creator Tools</strong> (lorebook tools, see that tab's own help button).</p>
+      <p>Every section is a <strong>collapsible card</strong>: click a card's header to fold it away and keep the panel tidy. Your layout is remembered. You can also drag the panel by its top bar, or click the – button to shrink it down to just the sun icon.</p>
+    </div>
+  </div>
+
+  <div class="section-label">Chat Tools features</div>
 
   <div class="card">
     <div class="card-head"><div class="card-icon">📊</div><div class="card-title">Session Stats</div><span class="card-tag">on by default</span></div>
@@ -131,9 +200,9 @@
     <div class="card-body">
       <p>Counts messages sent since you last opened the Nexus. Not mandatory at all, but if you like keeping tabs on it and pruning unnecessary nodes when it gets high, it's a handy reference to have.</p>
       <div class="nexus-pills">
-        <span class="pill green">Under 20 — all good</span>
-        <span class="pill orange">20 to 40 — worth a check</span>
-        <span class="pill red">Over 40 — check Nexus now</span>
+        <span class="pill green">Under 20: all good</span>
+        <span class="pill orange">20 to 40: worth a check</span>
+        <span class="pill red">Over 40: check Nexus now</span>
       </div>
       <div class="tip"><span class="tip-icon">💡</span><span>Checking your Nexus regularly and pruning unnecessary details or duplicated nodes can improve longform roleplay health!</span></div>
     </div>
@@ -171,11 +240,14 @@
   </div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">⬇️</div><div class="card-title">Download Chat</div></div>
+    <div class="card-head"><div class="card-icon">⬇️</div><div class="card-title">Download &amp; scroll buttons</div></div>
     <div class="card-body">
-      <p>Exports the full conversation as a plain text file with the character's name on each bot message. The toolkit scrolls to the top first to load older messages, then asks you to confirm before saving.</p>
-      <div class="tip"><span class="tip-icon">💡</span><span>This also works as a quick way to jump to the very beginning of a long chat. Click Download chat, wait for it to finish scrolling, then hit Cancel when the confirmation appears. The chat will stay at the first message.</span></div>
-      <div class="tip tip-warn"><span class="tip-icon">🔄</span><span>Download Chat didn't reach the first message? Refresh the page and try again. If it still isn't reaching the start after a couple of tries, please let Sunny know!</span></div>
+      <p>There are <strong>three buttons</strong> at the bottom of Chat Tools:</p>
+      <p><strong>↑ Scroll to first message</strong>: slowly scrolls up to load every older message in the chat. When it finishes it asks you to confirm it really reached the first message (if not, just scroll again).</p>
+      <p><strong>⬇ Download chat (.txt)</strong>: saves the whole conversation as a plain text file, with the character's name on each bot message. If you haven't scrolled up yet, it offers to do that first so nothing is missed.</p>
+      <p><strong>↓ Back to bottom</strong>: jumps you straight back down to the latest message.</p>
+      <div class="tip"><span class="tip-icon">💡</span><span>Scroll to first message is also a handy way to jump to the very start of a long chat. Just scroll up, then close the confirmation.</span></div>
+      <div class="tip tip-warn"><span class="tip-icon">🔄</span><span>Didn't reach the first message? Refresh the page and try again. If it still won't reach the start after a couple of tries, please let Sunny know!</span></div>
     </div>
   </div>
 

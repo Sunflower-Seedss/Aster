@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Sunny's Dreamjourney Toolkit V1",
-  "version": "1.2",
+  "name": "Sunny's Dreamjourney Toolkit V2",
+  "version": "2.1",
   "description": "Quality-of-life tools for DreamJourney AI chat sessions. Local-only. Made by SunflowerS.",
   "permissions": [
     "storage"
@@ -27,7 +27,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Sunny's Dreamjourney Toolkit V1",
+    "default_title": "Sunny's Dreamjourney Toolkit V2",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -46,6 +46,10 @@
       "resources": [
         "help.html",
         "help.js",
+        "lorebook-studio.html",
+        "lorebook-studio.js",
+        "creator-tools-help.html",
+        "dj-bridge.js",
         "icons/icon16.png",
         "icons/icon32.png",
         "icons/icon48.png",
