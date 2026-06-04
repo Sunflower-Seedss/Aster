@@ -894,7 +894,10 @@
           `<button id="djt-load-close" class="djt-lb-x" title="Close">✕</button>` +
         `</div>` +
         `<div class="djt-lb-body">` +
-          `<div class="djt-lb-step">Your saved lorebooks</div>` +
+          `<div class="djt-lb-step" style="display:flex;justify-content:space-between;align-items:center;gap:8px">` +
+            `<span>Your saved lorebooks</span>` +
+            `<button id="djt-lib-clear" class="djt-mini-btn ghost" style="padding:3px 10px;font-size:10px;display:none">Clear all</button>` +
+          `</div>` +
           `<div id="djt-lib-list" class="djt-lb-entries" style="margin-bottom:6px"></div>` +
           `<div class="djt-lb-step" id="djt-lb-step2">Paste a new lorebook</div>` +
           `<textarea id="djt-load-ta" class="djt-lb-ta mono" placeholder="Paste your lorebook JSON here..."></textarea>` +
@@ -913,9 +916,21 @@
     document.getElementById('djt-load-cancel-btn').addEventListener('click', close);
     ov.addEventListener('click', e => { if (e.target === ov) close(); });
 
+    const clearAllBtn = document.getElementById('djt-lib-clear');
+    if (clearAllBtn) clearAllBtn.addEventListener('click', () => {
+      if (!confirm('Clear ALL saved lorebooks? This empties your saved library. The currently active lorebook stays loaded.')) return;
+      saveLorebookLibrary([]);
+      const list = document.getElementById('djt-lib-list');
+      if (list) list.innerHTML = '<div class="djt-lb-empty">No saved lorebooks yet.</div>';
+      clearAllBtn.style.display = 'none';
+      toast('Saved lorebooks cleared.');
+    });
+
     loadLorebookLibrary(lib => {
       const list = document.getElementById('djt-lib-list');
       if (!list) return;
+      const clearBtn = document.getElementById('djt-lib-clear');
+      if (clearBtn) clearBtn.style.display = lib.length ? '' : 'none';
       if (lib.length === 0) {
         list.innerHTML = '<div class="djt-lb-empty">No saved lorebooks yet.</div>';
       } else {
