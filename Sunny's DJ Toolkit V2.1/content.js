@@ -24,6 +24,7 @@
     // backend: 'ollama' | 'openai' | 'lmstudio' | 'kobold' | 'api'
     quill: {
       enabled: false,
+      ack: false,          // user has read the Quill guide + safety note
       backend: 'ollama',
       ollamaUrl: 'http://localhost:11434',
       ollamaModel: '',
@@ -1669,13 +1670,7 @@
         `<div id="djt-advanced-wrap">` +
           `<button id="djt-advanced-toggle" class="djt-advanced-toggle">▸ Advanced</button>` +
           `<div id="djt-advanced-body" style="display:none">` +
-            `<div class="djt-theme-block">` +
-              `<div class="djt-theme-label">🎨 Theme</div>` +
-              `<div class="djt-theme-opts">` +
-                `<button class="djt-theme-opt" data-skin="dreamjourney">DreamJourney</button>` +
-                `<button class="djt-theme-opt" data-skin="sunflowers">Sunflowers</button>` +
-              `</div>` +
-            `</div>` +
+            `<div class="djt-tool-note" style="text-align:center;margin-bottom:8px">Theme options have moved to the Settings window (click the toolkit button in your browser bar).</div>` +
             `<button id="djt-surprise-btn" class="djt-mini-btn full djt-surprise">&#127800; Surprise me!</button>` +
           `</div>` +
         `</div>` +

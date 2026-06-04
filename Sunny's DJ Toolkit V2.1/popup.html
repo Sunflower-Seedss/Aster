@@ -49,6 +49,16 @@
     font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 0; font-family: inherit; }
   .quill-name { color: var(--accent); font-weight: 700; }
   .collapsed { display: none; }
+  #adv-body { margin-top: 10px; }
+  .guide-link { display: block; text-align: center; padding: 9px 8px; margin-bottom: 10px;
+    background: var(--accent-bg); border: 1px solid var(--accent-br); border-radius: 6px;
+    color: var(--accent); font-size: 12px; font-weight: 700; }
+  .guide-link:hover { background: rgba(99,102,241,0.28); }
+  .ack-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--soft);
+    margin-bottom: 12px; cursor: pointer; line-height: 1.35; }
+  .ack-row input { flex-shrink: 0; }
+  .gated { opacity: 0.4; pointer-events: none; transition: opacity 0.2s; }
+  .gated.on { opacity: 1; pointer-events: auto; }
   #status { font-size: 11px; color: var(--muted); margin-top: 6px; text-align: center; min-height: 14px; }
 </style>
 </head>
@@ -77,13 +87,17 @@
 
   <!-- QUILL CONNECTION (Advanced) -->
   <section>
-    <h2>Advanced &middot; <span class="quill-name">Quill</span> connection</h2>
-    <div class="field row-toggle">
-      <span style="font-size:12px;color:var(--soft)">Enable Quill</span>
-      <label class="switch"><input type="checkbox" id="q-enabled"><span class="slider"></span></label>
-    </div>
+    <button class="adv-toggle" id="adv-toggle">&#9656; Advanced &middot; <span class="quill-name">Quill</span> connection</button>
+    <div id="adv-body" class="collapsed">
+      <a class="guide-link" id="guide-link" href="#" target="_blank">&#9733; Please click here before using Quill</a>
+      <label class="ack-row"><input type="checkbox" id="q-ack"> I understand &mdash; I've read the guide &amp; safety note</label>
+      <div id="q-gate" class="gated">
+        <div class="field row-toggle">
+          <span style="font-size:12px;color:var(--soft)">Enable Quill</span>
+          <label class="switch"><input type="checkbox" id="q-enabled"><span class="slider"></span></label>
+        </div>
 
-    <div id="q-config">
+        <div id="q-config">
       <div class="field">
         <label class="lbl">Backend</label>
         <select id="q-backend">
@@ -120,7 +134,9 @@
       <div class="btn-row">
         <button class="act ghost" id="q-test" style="flex:1">Test connection</button>
       </div>
-      <div class="testline" id="q-testline"></div>
+        <div class="testline" id="q-testline"></div>
+        </div>
+      </div>
     </div>
   </section>
 

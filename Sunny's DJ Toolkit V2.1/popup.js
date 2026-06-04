@@ -4,7 +4,7 @@
 
 var SETTINGS_KEY = 'djt:settings';
 var QUILL_DEFAULTS = {
-  enabled: false, backend: 'ollama',
+  enabled: false, ack: false, backend: 'ollama',
   ollamaUrl: 'http://localhost:11434', ollamaModel: '',
   lmstudioUrl: 'http://localhost:1234', lmstudioModel: '',
   koboldUrl: 'http://localhost:5001',
@@ -33,6 +33,14 @@ function render() {
   // appearance
   segSelect('skin-seg', 'skin', settings.skin);
   segSelect('mode-seg', 'mode', settings.theme);
+  // quill guide + acknowledgement gate
+  var gl = $('guide-link'); if (gl) { try { gl.href = chrome.runtime.getURL('quill-guide.html'); } catch (e) {} }
+  $('q-ack').checked = !!settings.quill.ack;
+  applyGate();
+  if (settings.quill.ack) {
+    $('adv-body').classList.remove('collapsed');
+    $('adv-toggle').innerHTML = '▾ Advanced · <span class="quill-name">Quill</span> connection';
+  }
   // quill
   $('q-enabled').checked = !!settings.quill.enabled;
   $('q-backend').value = settings.quill.backend || 'ollama';
@@ -83,11 +91,15 @@ function showBackendFields(backend) {
 function toggleQuillConfig() {
   $('q-config').style.opacity = $('q-enabled').checked ? '1' : '0.45';
 }
+function applyGate() {
+  var g = $('q-gate'); if (g) g.classList.toggle('on', $('q-ack').checked);
+}
 
 // ---- gather current form into a quill cfg ----
 function gatherQuill() {
   return {
     enabled: $('q-enabled').checked,
+    ack: $('q-ack').checked,
     backend: $('q-backend').value,
     ollamaUrl: $('q-ollamaUrl').value.trim(),
     ollamaModel: $('q-ollamaModel').value,
@@ -170,6 +182,16 @@ document.addEventListener('DOMContentLoaded', function () {
   load();
   wireSeg('skin-seg', 'skin', 'skin');
   wireSeg('mode-seg', 'mode', 'theme');
+  $('adv-toggle').addEventListener('click', function () {
+    var b = $('adv-body'); var wasCollapsed = b.classList.contains('collapsed');
+    b.classList.toggle('collapsed', !wasCollapsed);
+    this.innerHTML = (wasCollapsed ? '▾' : '▸') + ' Advanced · <span class="quill-name">Quill</span> connection';
+  });
+  $('q-ack').addEventListener('change', function () {
+    applyGate();
+    settings.quill = gatherQuill();
+    chrome.storage.local.set(makeWrite());  // persist the acknowledgement immediately
+  });
   $('q-enabled').addEventListener('change', toggleQuillConfig);
   $('q-backend').addEventListener('change', function () { showBackendFields(this.value); });
   $('q-test').addEventListener('click', testConn);
