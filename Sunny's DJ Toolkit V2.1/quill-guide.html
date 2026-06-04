@@ -6,6 +6,7 @@
 <title>Quill — Guide &amp; Setup</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { overflow-wrap: break-word; }
 
   :root {
     --bg: #0d0c14; --surface: rgba(255,255,255,0.03); --border: rgba(255,255,255,0.08);
@@ -27,7 +28,16 @@
     --border-hover: rgba(78,110,60,0.40); --text: #332820; --soft: #5C4433; --muted: #7A5C3E;
     --accent: #4E6E3C; --card-shadow: 0 2px 12px rgba(122,92,62,0.10);
   }
-  [data-skin="sunflowers"] body::before { display: none; }
+  [data-skin="sunflowers"] body::before { display: block; opacity: 1;
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(157,196,122,0.16), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(224,170,60,0.12), transparent 55%),
+      linear-gradient(160deg, #1b1308 0%, #130E08 70%); }
+  [data-skin="sunflowers"][data-theme="light"] body::before {
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(78,110,60,0.12), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(212,160,23,0.12), transparent 55%),
+      linear-gradient(160deg, #F3ECDC 0%, #EFE8D8 70%); }
 
   body {
     background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, sans-serif;
@@ -169,7 +179,7 @@
   </div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">🪶</div><div class="card-title">What it can do</div></div>
+    <div class="card-head"><div class="card-icon">💬</div><div class="card-title">On the Chat tab</div></div>
     <div class="card-body">
       <ul>
         <li><strong>Improve my message</strong> — polishes the text in your chat box, from light grammar fixes (1) up to a full creative rewrite of a rough note (5), using the bot's last message as context.</li>
@@ -177,6 +187,18 @@
         <li><strong>Summarize chat</strong> — turns recent messages (or the whole chat) into factual bullet points you can save.</li>
       </ul>
       <p>Quill never speaks or acts for the bot, never continues the scene for you, and never invents plot you didn't write.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">🛠️</div><div class="card-title">On the Creator tab</div></div>
+    <div class="card-body">
+      <p>On a bot create/edit page, Quill helps you build — but it stays a sounding board, never a ghost-writer.</p>
+      <ul>
+        <li><strong>Character Lens</strong> — describe what your character is doing wrong and Quill gives an analytical second read of your bot's files. It looks for wording a model might misread (and tells you honestly if it doesn't think the wording is the problem). It will <em>not</em> agree just to please you, and it points you toward testing across models/settings before you rewrite anything.</li>
+        <li><strong>Import a character</strong> — upload a SillyTavern card (<code>.png</code> / <code>.json</code>) or a plain <code>.txt</code> bot from anywhere, and Quill reorganises it into DreamJourney's template. You can then download it as a bot <code>.json</code> or apply it straight to the open bot page. It rehomes the content faithfully — it doesn't rewrite the character.</li>
+      </ul>
+      <p><strong>What Quill will never do:</strong> rewrite your bot's "guts" for you or hand you a finished character. Creating a bot is a human craft — Quill will encourage you to make the changes yourself.</p>
     </div>
   </div>
 

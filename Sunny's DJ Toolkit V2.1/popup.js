@@ -94,9 +94,7 @@ function renderVisibility() {
       if (cb.checked) delete settings.hidden[s.key];
       else settings.hidden[s.key] = true;
       guardLastTab();
-      chrome.storage.local.set(makeWrite());        // persist + live-apply
-      // reflect any guard correction back into the toggles
-      renderVisibility();
+      renderVisibility();   // reflect any guard correction; persists on Save
     });
     var sl = document.createElement('span'); sl.className = 'slider';
     lab.appendChild(cb); lab.appendChild(sl);
@@ -242,11 +240,7 @@ document.addEventListener('DOMContentLoaded', function () {
     b.classList.toggle('collapsed', !wasCollapsed);
     this.innerHTML = (wasCollapsed ? '▾' : '▸') + ' Advanced · <span class="quill-name">Quill</span> connection';
   });
-  $('q-ack').addEventListener('change', function () {
-    applyGate();
-    settings.quill = gatherQuill();
-    chrome.storage.local.set(makeWrite());  // persist the acknowledgement immediately
-  });
+  $('q-ack').addEventListener('change', applyGate);  // UI gate only; persists on Save
   $('q-enabled').addEventListener('change', toggleQuillConfig);
   $('q-backend').addEventListener('change', function () { showBackendFields(this.value); });
   $('q-test').addEventListener('click', testConn);

@@ -6,6 +6,7 @@
 <title>Lorebook Workshop · Aster</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { overflow-wrap: break-word; }
 
   :root {
     --bg:#0d0c14; --surface:rgba(255,255,255,0.03); --surface2:rgba(255,255,255,0.06);
@@ -54,7 +55,16 @@
     opacity:0.45; pointer-events:none;
   }
   [data-theme="light"] body::before { background-image:url('icons/bg-light.jpg'); }
-  [data-skin="sunflowers"] body::before { display:none; }
+  [data-skin="sunflowers"] body::before { display: block; opacity: 1;
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(157,196,122,0.16), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(224,170,60,0.12), transparent 55%),
+      linear-gradient(160deg, #1b1308 0%, #130E08 70%); }
+  [data-skin="sunflowers"][data-theme="light"] body::before {
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(78,110,60,0.12), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(212,160,23,0.12), transparent 55%),
+      linear-gradient(160deg, #F3ECDC 0%, #EFE8D8 70%); }
 
   /* HERO */
   .hero {
