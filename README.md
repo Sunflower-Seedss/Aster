@@ -7,7 +7,17 @@ Part of [Sunflower Fields](https://sunflower-seedss.github.io/Sunflower-Seeds-Ho
 
 Aster adds a friendly on-page panel to your DreamJourney chats and bot pages — for tracking, tidying, writing and building. All data is stored locally on your device; nothing is uploaded anywhere (the only exception is the optional **Quill** assistant, which talks to a language model *you* choose and connect).
 
-> The extension lives in the `Aster/` folder. See its [README](./Aster/README.md) for the full breakdown.
+> The extension lives in the `Aster/` folder. See its [README](./Aster/README.md) for the full breakdown, or the [**Aster info page**](https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/aster.html) for the full tour.
+
+       ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
+
+## ⬇️ Download
+
+Grab a ready-made zip from the [**Releases**](../../releases) page, or directly:
+
+- 🖥️ **Desktop** — [`dist/Aster.zip`](./dist/Aster.zip) · Chrome / Edge / Brave
+- 📱 **Mobile (Android)** — [`dist/Aster-Mobile.zip`](./dist/Aster-Mobile.zip) · Kiwi or Lemur Browser
+- 🌐 **Help pages (for a website)** — [`dist/Aster-Pages.zip`](./dist/Aster-Pages.zip)
 
        ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
 
