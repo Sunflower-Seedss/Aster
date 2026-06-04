@@ -59,6 +59,12 @@
   .ack-row input { flex-shrink: 0; }
   .gated { opacity: 0.4; pointer-events: none; transition: opacity 0.2s; }
   .gated.on { opacity: 1; pointer-events: auto; }
+  .vis-group { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+    margin: 12px 0 5px; }
+  .vis-group:first-child { margin-top: 0; }
+  .vis-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0;
+    border-bottom: 1px solid var(--line); font-size: 12px; color: var(--soft); }
+  .vis-row:last-child { border-bottom: none; }
   #status { font-size: 11px; color: var(--muted); margin-top: 6px; text-align: center; min-height: 14px; }
 </style>
 </head>
@@ -83,6 +89,13 @@
         <button data-mode="light">☀️ Light</button>
       </div>
     </div>
+  </section>
+
+  <!-- PANEL SECTIONS (show / hide) -->
+  <section>
+    <h2>Panel sections</h2>
+    <div id="vis-list"></div>
+    <div class="hint">Turn items off to hide them from the on-page panel. Nothing is deleted — your data and settings stay put.</div>
   </section>
 
   <!-- QUILL CONNECTION (Advanced) -->
@@ -144,7 +157,7 @@
     <button class="act" id="save-btn">Save settings</button>
   </div>
   <div id="status"></div>
-  <div class="hint">Tabs, stats, scratchpad and tools live in the on-page panel. Hiding individual panel sections is coming next. All data stays on your device.</div>
+  <div class="hint">The full toolkit lives in the on-page panel. Use “Panel sections” above to hide anything you don't use. All data stays on your device.</div>
 
   <script src="popup.js"></script>
 </body>

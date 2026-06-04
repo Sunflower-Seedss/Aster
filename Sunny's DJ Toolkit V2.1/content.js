@@ -1684,7 +1684,7 @@
         `<div id="djt-tab-creator" class="djt-tab-pane" style="display:none">` +
 
           // Bot Tools card
-          `<div class="djt-card">` +
+          `<div class="djt-card" id="djt-bottools-card">` +
             cardH('Bot Tools', 'bottools') +
             `<div class="djt-card-body">` +
               `<button id="djt-bot-export-btn" class="djt-mini-btn full primary" style="margin-bottom:6px">📤 Export bot</button>` +
@@ -1694,7 +1694,7 @@
           `</div>` +
 
           // Lorebook Tools card
-          `<div class="djt-card">` +
+          `<div class="djt-card" id="djt-lorebook-card">` +
             cardH('Lorebook Tools', 'lorebook') +
             `<div class="djt-card-body">` +
               `<button id="djt-lb-load-btn" class="djt-mini-btn full primary" style="margin-bottom:6px">📥 Load Lorebook</button>` +
@@ -1719,7 +1719,7 @@
           `</div>` +
 
           // Tool Pages card
-          `<div class="djt-card">` +
+          `<div class="djt-card" id="djt-toolpages-card">` +
             cardH('Tool Pages', 'toolpages') +
             `<div class="djt-card-body">` +
               `<a class="djt-tool-link" href="${studioUrl}" target="_blank">Lorebook Studio ↗</a>` +
@@ -1915,11 +1915,43 @@
       const cb=document.getElementById('djt-t-'+key); if(cb) cb.checked=settings[key]!==false;
     });
   }
+  // Sections the user can hide from the pop-out via the Settings window.
+  // key = settings.hidden[key]; also exported (by label) to the popup.
+  const HIDEABLE = [
+    { key:'stats',        el:'djt-stats-card',         tab:'chat',    label:'Session stats' },
+    { key:'scratch',      el:'djt-scratch-card',       tab:'chat',    label:'User Input Recovery' },
+    { key:'features',     el:'djt-features-card',      tab:'chat',    label:'Feature toggles' },
+    { key:'download',     el:'djt-dl-btns',            tab:'chat',    label:'Download & scroll buttons' },
+    { key:'quillchat',    el:'djt-quill-chat-card',    tab:'chat',    label:'Quill (Chat)' },
+    { key:'bottools',     el:'djt-bottools-card',      tab:'creator', label:'Bot Tools' },
+    { key:'lorebook',     el:'djt-lorebook-card',      tab:'creator', label:'Lorebook Tools' },
+    { key:'toolpages',    el:'djt-toolpages-card',     tab:'creator', label:'Tool Pages' },
+    { key:'quillcreator', el:'djt-quill-creator-card', tab:'creator', label:'Quill (Character Lens)' }
+  ];
+  const isHidden = key => !!(settings.hidden && settings.hidden[key]);
+
+  // Final visibility = feature-enabled AND not user-hidden. Also hides tabs.
   function applyVisibility() {
-    const statsCard=document.getElementById('djt-stats-card'); if(statsCard)statsCard.style.display=settings.stats?'':'none';
-    const nexusSec=document.getElementById('djt-nexus-section'); if(nexusSec)nexusSec.style.display=(settings.stats&&settings.nexus)?'':'none';
-    const scratchCard=document.getElementById('djt-scratch-card'); if(scratchCard)scratchCard.style.display=settings.scratchpad?'':'none';
+    const show=(id,ok)=>{ const el=document.getElementById(id); if(el) el.style.display = ok ? '' : 'none'; };
+    // feature-gated + hidden-gated
+    show('djt-stats-card', settings.stats && !isHidden('stats'));
+    const nexusSec=document.getElementById('djt-nexus-section'); if(nexusSec) nexusSec.style.display=(settings.stats&&settings.nexus&&!isHidden('stats'))?'':'none';
+    show('djt-scratch-card', settings.scratchpad && !isHidden('scratch'));
     if(!settings.saveRegens){const regen=document.getElementById('djt-regen');if(regen)regen.style.display='none';}
+    // hidden-gated only
+    show('djt-features-card', !isHidden('features'));
+    show('djt-dl-btns', !isHidden('download'));
+    show('djt-quill-chat-card', !isHidden('quillchat'));
+    show('djt-bottools-card', !isHidden('bottools'));
+    show('djt-lorebook-card', !isHidden('lorebook'));
+    show('djt-toolpages-card', !isHidden('toolpages'));
+    show('djt-quill-creator-card', !isHidden('quillcreator'));
+    // tabs (don't let both be hidden; if the active one is hidden, move over)
+    const chatHidden=isHidden('tab:chat'), creatorHidden=isHidden('tab:creator');
+    const cb=document.querySelector('#djt-tabs .djt-tab[data-tab="chat"]'); if(cb) cb.style.display=chatHidden?'none':'';
+    const rb=document.querySelector('#djt-tabs .djt-tab[data-tab="creator"]'); if(rb) rb.style.display=creatorHidden?'none':'';
+    if(settings.activeTab==='chat' && chatHidden && !creatorHidden) switchTab('creator', true);
+    else if(settings.activeTab==='creator' && creatorHidden && !chatHidden) switchTab('chat', true);
   }
 
   // ---- BOT EXPORT / IMPORT (bot create & edit pages) ---------
@@ -2217,7 +2249,7 @@
       if (typeof nv.theme === 'string') settings.theme = nv.theme;
       if (nv.hidden && typeof nv.hidden === 'object') settings.hidden = nv.hidden;
       if (nv.quill && typeof nv.quill === 'object') settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, nv.quill);
-      if (document.getElementById('djt-panel')) { setSkin(settings.skin); setTheme(settings.theme); refreshQuillUI(); }
+      if (document.getElementById('djt-panel')) { setSkin(settings.skin); setTheme(settings.theme); refreshQuillUI(); applyVisibility(); }
     });
   } catch (e) {}
 

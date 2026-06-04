@@ -11,6 +11,21 @@ var QUILL_DEFAULTS = {
   openaiBaseUrl: 'https://api.openai.com/v1', openaiModel: 'gpt-4o-mini', apiKey: ''
 };
 
+// Mirrors HIDEABLE in content.js (+ the two tab toggles). key -> settings.hidden[key].
+var VIS_SECTIONS = [
+  { key:'tab:chat',     label:'Chat Tools tab',         group:'Tabs' },
+  { key:'tab:creator',  label:'Creator Tools tab',      group:'Tabs' },
+  { key:'stats',        label:'Session stats',          group:'Chat Tools' },
+  { key:'scratch',      label:'User Input Recovery',    group:'Chat Tools' },
+  { key:'features',     label:'Feature toggles',        group:'Chat Tools' },
+  { key:'download',     label:'Download & scroll buttons', group:'Chat Tools' },
+  { key:'quillchat',    label:'Quill (Chat)',           group:'Chat Tools' },
+  { key:'bottools',     label:'Bot Tools',              group:'Creator Tools' },
+  { key:'lorebook',     label:'Lorebook Tools',         group:'Creator Tools' },
+  { key:'toolpages',    label:'Tool Pages',             group:'Creator Tools' },
+  { key:'quillcreator', label:'Quill (Character Lens)', group:'Creator Tools' }
+];
+
 var settings = null;
 function $(id) { return document.getElementById(id); }
 function setStatus(msg) {
@@ -23,6 +38,7 @@ function load() {
   chrome.storage.local.get([SETTINGS_KEY], function (data) {
     settings = (data && data[SETTINGS_KEY]) || {};
     settings.quill = Object.assign({}, QUILL_DEFAULTS, settings.quill || {});
+    if (!settings.hidden || typeof settings.hidden !== 'object') settings.hidden = {};
     if (!settings.skin) settings.skin = 'dreamjourney';
     if (!settings.theme) settings.theme = 'dark';
     render();
@@ -33,6 +49,7 @@ function render() {
   // appearance
   segSelect('skin-seg', 'skin', settings.skin);
   segSelect('mode-seg', 'mode', settings.theme);
+  renderVisibility();
   // quill guide + acknowledgement gate
   var gl = $('guide-link'); if (gl) { try { gl.href = chrome.runtime.getURL('quill-guide.html'); } catch (e) {} }
   $('q-ack').checked = !!settings.quill.ack;
@@ -54,6 +71,43 @@ function render() {
   setModelOption('q-lmstudioModel', settings.quill.lmstudioModel);
   showBackendFields($('q-backend').value);
   toggleQuillConfig();
+}
+
+// "Panel sections" list: a switch per section, ON = visible. Saves live so
+// the on-page panel updates immediately while the user tweaks.
+function renderVisibility() {
+  var list = $('vis-list'); if (!list) return;
+  list.innerHTML = '';
+  var lastGroup = null;
+  VIS_SECTIONS.forEach(function (s) {
+    if (s.group !== lastGroup) {
+      var g = document.createElement('div'); g.className = 'vis-group'; g.textContent = s.group;
+      list.appendChild(g); lastGroup = s.group;
+    }
+    var row = document.createElement('div'); row.className = 'vis-row';
+    var span = document.createElement('span'); span.textContent = s.label;
+    var lab = document.createElement('label'); lab.className = 'switch';
+    var cb = document.createElement('input'); cb.type = 'checkbox';
+    cb.checked = !settings.hidden[s.key];           // checked = shown
+    cb.addEventListener('change', function () {
+      if (cb.checked) delete settings.hidden[s.key];
+      else settings.hidden[s.key] = true;
+      guardLastTab();
+      chrome.storage.local.set(makeWrite());        // persist + live-apply
+      // reflect any guard correction back into the toggles
+      renderVisibility();
+    });
+    var sl = document.createElement('span'); sl.className = 'slider';
+    lab.appendChild(cb); lab.appendChild(sl);
+    row.appendChild(span); row.appendChild(lab);
+    list.appendChild(row);
+  });
+}
+// Never let BOTH tabs be hidden — re-show whichever the user just hid second.
+function guardLastTab() {
+  if (settings.hidden['tab:chat'] && settings.hidden['tab:creator']) {
+    delete settings.hidden['tab:creator'];
+  }
 }
 
 function setModelOption(selId, val) {
