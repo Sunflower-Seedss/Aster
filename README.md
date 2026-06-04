@@ -54,7 +54,7 @@ Quill connects Aster to a language model **you** choose — local (Ollama, LM St
 Works on Chrome, Edge, Brave, and any other Chromium-based browser.
 Firefox is not recommended: manually-installed extensions reset when the browser closes, so stats and saved data won't carry over.
 
-**Mobile:** use **[Kiwi Browser](https://kiwibrowser.com)** (Chromium for Android), which loads extensions from a `.zip` — grab [`dist/Aster-Mobile.zip`](./dist/Aster-Mobile.zip). The core tools work the same as desktop. **Quill on mobile only supports an API connection** — local backends (Ollama, LM Studio, koboldcpp) need a computer, so they aren't reachable from a phone.
+**Mobile:** use a Chromium-for-Android browser that supports extensions — **[Kiwi Browser](https://kiwibrowser.com)** or **Lemur Browser** — and load [`dist/Aster-Mobile.zip`](./dist/Aster-Mobile.zip). The core tools work the same as desktop. **Quill on mobile only supports an API connection** — local backends (Ollama, LM Studio, koboldcpp) need a computer, so they aren't reachable from a phone.
 
        ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
 

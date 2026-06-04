@@ -43,6 +43,9 @@ All your data — stats, drafts, saved replies, settings — stays in your brows
 2. Click **Load unpacked** and select this folder.
 3. Open a DreamJourney chat — the panel appears automatically.
 
+## 📱 Mobile
+Works on Android via a Chromium browser that supports extensions — **Kiwi Browser** or **Lemur Browser**. Load the extension the same way (Developer mode → Load unpacked / from zip). All the core tools work just like desktop. **On mobile, Quill only supports an API connection** — local backends (Ollama, LM Studio, koboldcpp) run on a computer, so a phone can't reach them.
+
 ---
 
 🌻 **[Visit Sunflower Fields](https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/index.html)** for more.

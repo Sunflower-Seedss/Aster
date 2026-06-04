@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creator Tools: How They Work</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { overflow-wrap: break-word; }
+  :root {
+    --bg:#0d0c14; --surface:rgba(255,255,255,0.03); --border:rgba(255,255,255,0.08);
+    --border-hover:rgba(167,139,250,0.2); --text:#e4e4e7; --soft:#a1a1aa; --muted:#52525b;
+    --accent:#a78bfa;
+  }
+  [data-theme="light"] {
+    --bg:#f5f0ff; --surface:rgba(99,102,241,0.06); --border:rgba(99,102,241,0.14);
+    --border-hover:rgba(99,102,241,0.35); --text:#1e1b4b; --soft:#374151; --muted:#9ca3af;
+    --accent:#6366f1;
+  }
+  [data-skin="sunflowers"] {
+    --bg:#130E08; --surface:rgba(157,196,122,0.06); --border:rgba(157,196,122,0.15);
+    --border-hover:rgba(157,196,122,0.35); --text:#F0E8D8; --soft:#C8B89A; --muted:#C4A882;
+    --accent:#9DC47A;
+  }
+  [data-skin="sunflowers"][data-theme="light"] {
+    --bg:#EFE8D8; --surface:rgba(143,175,122,0.10); --border:rgba(143,175,122,0.28);
+    --border-hover:rgba(78,110,60,0.40); --text:#332820; --soft:#5C4433; --muted:#7A5C3E;
+    --accent:#4E6E3C;
+  }
+  body { background:var(--bg); color:var(--text); font-family:ui-sans-serif, system-ui, sans-serif; font-size:14px; line-height:1.65; min-height:100vh; }
+  body::before { content:''; position:fixed; inset:0; z-index:-1; background-image:url('icons/bg-dark.jpg'); background-size:cover; background-position:center top; opacity:0.5; pointer-events:none; }
+  [data-theme="light"] body::before { background-image:url('icons/bg-light.jpg'); }
+  [data-skin="sunflowers"] body::before { display: block; opacity: 1;
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(157,196,122,0.16), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(224,170,60,0.12), transparent 55%),
+      linear-gradient(160deg, #1b1308 0%, #130E08 70%); }
+  [data-skin="sunflowers"][data-theme="light"] body::before {
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(78,110,60,0.12), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(212,160,23,0.12), transparent 55%),
+      linear-gradient(160deg, #F3ECDC 0%, #EFE8D8 70%); }
+
+  .hero { background:rgba(13,12,20,0.76); border-bottom:1px solid rgba(167,139,250,0.18); padding:36px 28px 28px; text-align:center; position:relative; backdrop-filter:blur(2px); }
+  [data-theme="light"] .hero { background:rgba(245,240,255,0.84); border-bottom-color:rgba(99,102,241,0.18); }
+  .hero-icon { width:52px; height:52px; margin:0 auto 10px; display:block; filter:drop-shadow(0 0 12px rgba(251,191,36,0.35)); }
+  h1 { font-size:22px; font-weight:800; color:var(--accent); letter-spacing:-0.01em; margin-bottom:4px; }
+  .hero-sub { font-size:13px; color:var(--muted); }
+  .hero-sub span { color:var(--soft); }
+  .theme-btn { position:absolute; top:16px; right:16px; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:6px 10px; font-size:14px; cursor:pointer; color:var(--text); }
+
+  .page-nav { max-width:660px; margin:18px auto 0; padding:0 20px; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; position:relative; z-index:1; }
+  .page-nav a, .page-nav-here { font-size:12px; font-weight:700; padding:7px 14px; border-radius:20px; text-decoration:none; border:1px solid var(--border); }
+  .page-nav a { background:var(--surface); color:var(--accent); transition:background .15s, border-color .15s; }
+  .page-nav a:hover { background:var(--border); border-color:var(--border-hover); }
+  .page-nav-here { background:var(--accent); color:#fff; border-color:transparent; }
+
+  main { max-width:660px; margin:0 auto; padding:28px 20px 0; }
+  .intro { font-size:14px; color:var(--soft); margin-bottom:8px; line-height:1.7; }
+  .section-label { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.12em; color:var(--accent); margin:24px 0 10px; padding-left:2px; text-shadow:0 1px 5px rgba(0,0,0,0.6); }
+  [data-theme="light"] .section-label { text-shadow:none; }
+
+  .card { background:rgba(13,12,20,0.82); border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:18px 20px; margin-bottom:9px; backdrop-filter:blur(4px); }
+  [data-theme="light"] .card { background:rgba(246,242,255,0.86); border-color:rgba(99,102,241,0.16); }
+  .card-head { display:flex; align-items:center; gap:11px; margin-bottom:9px; }
+  .card-icon { width:34px; height:34px; border-radius:9px; background:rgba(167,139,250,0.1); border:1px solid rgba(167,139,250,0.18); display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; }
+  [data-theme="light"] .card-icon { background:rgba(99,102,241,0.08); border-color:rgba(99,102,241,0.18); }
+  .card-title { font-size:15px; font-weight:700; color:var(--text); }
+  .card-body { font-size:13px; color:var(--soft); line-height:1.68; }
+  .card-body p { margin-bottom:9px; }
+  .card-body p:last-child { margin-bottom:0; }
+  .card-body strong { color:var(--text); font-weight:700; }
+
+  .steps { counter-reset:step; margin:6px 0 4px; padding:0; list-style:none; }
+  .steps li { position:relative; padding:6px 0 6px 34px; font-size:13px; color:var(--soft); line-height:1.55; }
+  .steps li::before {
+    counter-increment:step; content:counter(step);
+    position:absolute; left:0; top:5px; width:22px; height:22px; border-radius:50%;
+    background:rgba(167,139,250,0.14); border:1px solid rgba(167,139,250,0.35); color:var(--accent);
+    font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center;
+  }
+  [data-theme="light"] .steps li::before { background:rgba(99,102,241,0.1); border-color:rgba(99,102,241,0.3); }
+
+  .tip { background:rgba(99,102,241,0.07); border:1px solid rgba(99,102,241,0.16); border-radius:9px; padding:9px 13px; margin-top:10px; font-size:12px; color:var(--soft); display:flex; gap:8px; line-height:1.5; }
+  .tip-icon { flex-shrink:0; }
+  .tip-warn { background:rgba(217,119,6,0.08); border-color:rgba(217,119,6,0.28); }
+  [data-skin="sunflowers"] .tip-warn { background:rgba(212,168,50,0.10); border-color:rgba(212,168,50,0.30); }
+  code { font-family:ui-monospace, monospace; font-size:0.92em; background:var(--surface); padding:1px 5px; border-radius:4px; }
+  .swatch { display:inline-block; padding:0 4px; border-radius:3px; background:rgba(167,139,250,0.30); text-decoration:underline; text-decoration-color:#a78bfa; text-decoration-thickness:2px; color:inherit; font-weight:600; }
+
+  .footer-wrap { max-width:660px; margin:36px auto 0; border-top:1px solid rgba(255,255,255,0.08); padding:30px 20px 44px; text-align:center; background:rgba(13,12,20,0.76); backdrop-filter:blur(4px); }
+  [data-theme="light"] .footer-wrap { border-top-color:rgba(99,102,241,0.12); background:rgba(246,242,255,0.82); }
+  .footer-thanks { font-size:16px; font-weight:800; color:var(--accent); margin-bottom:4px; }
+  .footer-name { font-size:13px; color:var(--muted); }
+  .footer-data { font-size:11px; color:var(--muted); margin-top:16px; opacity:0.7; }
+
+  /* Sunflowers skin — elegant serif headings */
+  [data-skin="sunflowers"] h1 { font-family:'Cormorant Garamond', Georgia, 'Times New Roman', serif; font-weight:700; letter-spacing:0.01em; }
+  [data-skin="sunflowers"] .card-title { font-family:'Cormorant Garamond', Georgia, serif; font-size:17px; font-weight:700; }
+
+  /* Sunflowers skin — retint hardcoded surfaces */
+  [data-skin="sunflowers"] .hero { background:rgba(28,20,12,0.82); border-bottom-color:rgba(157,196,122,0.20); }
+  [data-skin="sunflowers"][data-theme="light"] .hero { background:rgba(254,249,240,0.86); border-bottom-color:rgba(78,110,60,0.20); }
+  [data-skin="sunflowers"] .card { background:rgba(28,20,12,0.82); border-color:rgba(157,196,122,0.16); }
+  [data-skin="sunflowers"][data-theme="light"] .card { background:rgba(254,249,240,0.88); border-color:rgba(78,110,60,0.16); }
+  [data-skin="sunflowers"] .card-icon { background:rgba(157,196,122,0.12); border-color:rgba(157,196,122,0.24); }
+  [data-skin="sunflowers"][data-theme="light"] .card-icon { background:rgba(78,110,60,0.10); border-color:rgba(78,110,60,0.22); }
+  [data-skin="sunflowers"] .footer-wrap { background:rgba(28,20,12,0.80); }
+  [data-skin="sunflowers"][data-theme="light"] .footer-wrap { background:rgba(254,249,240,0.84); }
+  [data-skin="sunflowers"] .tip { background:rgba(157,196,122,0.08); border-color:rgba(157,196,122,0.18); }
+  [data-skin="sunflowers"] .steps li::before { background:rgba(157,196,122,0.14); border-color:rgba(157,196,122,0.35); }
+  [data-skin="sunflowers"][data-theme="light"] .steps li::before { background:rgba(78,110,60,0.12); border-color:rgba(78,110,60,0.32); }
+
+  /* ---------- MOBILE ---------- */
+  @media (max-width: 560px) {
+    body { font-size:13.5px; }
+    .hero { padding:26px 16px 20px; }
+    .hero-icon { width:44px; height:44px; }
+    h1 { font-size:19px; }
+    .theme-btn { top:12px; right:12px; }
+    .page-nav { padding:0 14px; gap:6px; }
+    .page-nav a, .page-nav-here { font-size:11px; padding:6px 11px; }
+    main { padding:22px 14px 0; }
+    .intro { font-size:13px; }
+    .card { padding:15px 16px; }
+    .card-head { gap:9px; }
+    .card-icon { width:30px; height:30px; font-size:15px; }
+    .steps li { padding-left:30px; }
+    .footer-wrap { padding:26px 16px 38px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <button class="theme-btn" id="theme-toggle" title="Toggle light / dark mode">☀️</button>
+  <img src="icons/sun64.png" class="hero-icon" alt="">
+  <h1>Creator Tools: How They Work</h1>
+  <div class="hero-sub">Made by <span>SunflowerS at Dreamjourney AI</span></div>
+</div>
+
+<nav class="page-nav">
+  <a href="help.html">Chat Tools help</a>
+  <span class="page-nav-here">Creator Tools help</span>
+  <a href="lorebook-studio.html">Lorebook Workshop</a>
+  <a href="quill-guide.html">Quill guide</a>
+</nav>
+
+<main>
+  <p class="intro">These tools help you understand and fix your lorebooks. Take your time, there's no rush, and nothing here changes your lorebook on its own. You're always the one who decides what to keep.</p>
+  <p class="intro">First, a quick reminder of the golden rule: the model can only load <strong>1500 tokens</strong> of lorebook content per message. When too much triggers at once, the rest gets cut and the bot starts making things up. These tools help you see and control that.</p>
+  <p class="intro"><strong>Pinned entries count against this budget too.</strong> They load first, so if your pinned entries fill the 1500 tokens, no other entries will be counted at all. Keep pinned entries lean.</p>
+
+  <div class="section-label">Bot Tools</div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">📤</div><div class="card-title">Export &amp; Import a bot</div></div>
+    <div class="card-body">
+      <p>Make a complete, reusable copy of a bot: every field <em>and</em> the dropdowns and toggles (visibility, NSFW, content warnings, category, tags, lorebooks). Use it as a backup, to clone a bot, or to move one between accounts.</p>
+      <div class="tip tip-warn"><span class="tip-icon">⚠️</span><span>This only works in <strong>Legacy</strong> mode. On the bot page, set the <strong>Legacy / Modern</strong> toggle (top-right) to <strong>Legacy</strong> first. In Modern mode the fields live on separate wizard steps, so the toolkit cannot see them all at once. If you try while in Modern, it will remind you to switch.</span></div>
+      <ol class="steps">
+        <li>Open a bot's create or edit page on DreamJourney and switch to <strong>Legacy</strong>.</li>
+        <li>While you work, the panel quietly keeps a local backup ("Backed up locally ✓"). Nothing is uploaded.</li>
+        <li><strong>Export bot</strong> shows the full bot as a file. Copy it, or download the <code>.json</code>.</li>
+        <li><strong>Import bot</strong> on any bot page: paste or pick a file, then <strong>Populate bot</strong>. Every field, dropdown and toggle is filled in for you.</li>
+      </ol>
+      <div class="tip"><span class="tip-icon">🖼️</span><span>The image link is saved, but DreamJourney may still ask you to re-pick the picture file after an import. Everything else is restored automatically.</span></div>
+    </div>
+  </div>
+
+  <div class="section-label">In-extension tools</div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">📥</div><div class="card-title">Load Lorebook</div></div>
+    <div class="card-body">
+      <p>Everything else here uses the lorebook you load first. You only have to do this once, the toolkit remembers it.</p>
+      <ol class="steps">
+        <li>Click <strong>Load Lorebook</strong> in Creator Tools.</li>
+        <li>Paste your lorebook's JSON into the box and click <strong>Load</strong>. Or click <strong>Save &amp; Load</strong> to also keep it in your personal library for next time.</li>
+        <li>Saved lorebooks show up at the top. Click <strong>Use</strong> on any of them to switch instantly, or <strong>×</strong> to remove one.</li>
+      </ol>
+      <div class="tip"><span class="tip-icon">💡</span><span>Your library is stored only on your own device. Nothing is uploaded anywhere.</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">🔍</div><div class="card-title">Message Tester</div></div>
+    <div class="card-body">
+      <p>This checks a <strong>single message</strong> and tells you exactly what your lorebook would pull in because of it. Think of it as a dry run; nothing is sent, nothing changes.</p>
+      <ol class="steps">
+        <li>Load a lorebook first (see above).</li>
+        <li>Click <strong>Message Tester</strong>.</li>
+        <li>Type a message, or click <strong>Use last chat message</strong> to grab the most recent bot reply.</li>
+        <li>Click <strong>Analyze triggers</strong>.</li>
+      </ol>
+      <p>What you'll see:</p>
+      <p><strong>Highlighted words</strong>: the trigger words found in the message. <strong>Activated entries</strong>: every entry that would load, and <em>why</em> (a direct match, a cascade from another entry, or a pinned entry). <strong>The token bar</strong>: roughly how much of your 1500 budget it used. If you go over, the entries that got cut are shown greyed-out, so you can see what the bot <em>didn't</em> get.</p>
+      <div class="tip"><span class="tip-icon">💡</span><span>The tester can't tell you if the bot <em>used</em> the lore well, only what was available to it. That part is your call.</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">🔆</div><div class="card-title">Active Chat Scanner</div></div>
+    <div class="card-body">
+      <p>This is the <strong>live</strong> version. Instead of testing one message, it highlights your lorebook's trigger words <strong>right inside the real chat</strong> as you read it, so you can see at a glance what's triggering while you actually roleplay.</p>
+      <ol class="steps">
+        <li>Load a lorebook first (the scanner uses the same one).</li>
+        <li>Click <strong>Active Chat Scanner</strong> to turn it on. The button shows <strong>On</strong>.</li>
+        <li>Trigger words in the chat now appear like this: <span class="swatch">highlighted</span>.</li>
+        <li>Click the button again to turn it off.</li>
+      </ol>
+      <p>To keep it focused, the scanner only highlights the <strong>last 4 messages</strong> (your two most recent and the bot's two most recent), not the whole history.</p>
+      <div class="tip"><span class="tip-icon">💡</span><span>The scanner only paints colour over the words. It never edits your messages or your lorebook.</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">📊</div><div class="card-title">Active Chat Panel</div></div>
+    <div class="card-body">
+      <p>A live read-out, right inside the panel, of what your lorebook is doing in the chat <em>right now</em>. It looks at the <strong>last 4 messages</strong> and shows you the running token cost.</p>
+      <ol class="steps">
+        <li>Load a lorebook, then click <strong>Active Chat Panel</strong> to open the live read-out.</li>
+        <li>It shows little tags up top (like <em>2 direct</em>, <em>1 cascade</em>), a token bar out of 1500, and the list of activated entries with <em>why</em> each one fired.</li>
+        <li>It refreshes on its own whenever a new message is sent.</li>
+        <li>Need the complete breakdown? Click <strong>Full details</strong> to pop out the same rich view the Message Tester gives.</li>
+      </ol>
+      <div class="tip"><span class="tip-icon">💡</span><span>If the token bar turns red, you're over budget and some entries are being cut. Time to wrap a few triggers in Lorebook Workshop.</span></div>
+    </div>
+  </div>
+
+  <div class="section-label">Tool page</div>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">🛠️</div><div class="card-title">Lorebook Workshop</div></div>
+    <div class="card-body">
+      <p>A separate page with tools that actually <strong>change or check a lorebook file</strong> for you. Each tab has its own step-by-step guide built in. In short:</p>
+      <ol class="steps">
+        <li><strong>Merge</strong>: joins two lorebooks into one.</li>
+        <li><strong>Wrap All Triggers</strong>: stops cascade across the whole lorebook at once.</li>
+        <li><strong>Wrap a Snippet</strong>: stops cascade in just one entry you paste in.</li>
+        <li><strong>Remove Wrapping</strong>: the undo button, puts a wrapped lorebook back to normal.</li>
+        <li><strong>Format Checker</strong>: won't import into DreamJourney? Paste it here to find the exact problem (missing fields, an entry with no triggers, a stray comma).</li>
+      </ol>
+      <p>Always paste the result back into DreamJourney yourself, so you stay in control.</p>
+    </div>
+  </div>
+
+</main>
+
+<div class="footer-wrap">
+  <div class="footer-thanks">That's everything! Take it slow 💛</div>
+  <div class="footer-name">Sunny</div>
+  <div style="margin-top:12px"><a class="profile-link" href="https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/index.html" target="_blank" rel="noopener">🌻 Visit Sunflower Fields</a></div>
+  <div class="footer-data">All tools run locally on your device. Nothing is uploaded anywhere.</div>
+</div>
+
+<script src="help.js"></script>
+</body>
+</html>
