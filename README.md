@@ -1,31 +1,60 @@
-# Sunny-s-DreamJourney-AI-Toolkit
+# 🌻 Aster
 
-DreamJourney AI QOL Chromium Browser Extension 
-
-       ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
-
-**Sunny's Dreamjourney Toolkit V1**
-Here's what it does:
-
-**Stats + Nexus reminder** — tracks your message counts and rerolls per chat, and shows how many messages have passed since your last Nexus check. Turns orange then red as you get further from it, with a warning when it's time to check in.
-
-**Save regenerations** — Saves previous bot replies before they disappear when you regen. Browse them in the panel and swap one back in with one click. 
-
-**User Input Recovery** — Autosaves what you're typing so a crash or timeout won't lose your message. Also keeps your last 5 sent messages, so if Stop Generation deletes your message, you can grab it back.
-
-**Auto-refresh on Stop** — Stopping mid-generation can result in duplicate or missing messages. This gives you a 3-second countdown to refresh the page and clear the error. Cancel it if you need to copy something first (though if you have the Input Recovery switched on, your last message should already be saved in the extension!).
-
-**Delete Thinking** *(Nyx and Athena only)* — removes the thinking process block from a message once you're done with it. Edits it out permanently. It probably won't work if the thinking box isn't formatted correctly. 
- 
-**Download chat** — exports the full conversation as a .txt file with the character's actual name on each message. Scrolls to the top automatically to catch older messages first.
-
-Light and dark mode toggle built in. All data is stored locally on your device. Nothing is uploaded anywhere.
+DreamJourney AI quality-of-life Chromium browser extension.
+Part of [Sunflower Fields](https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/index.html) · made by SunflowerS.
 
        ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
 
-**Browser support**
+Aster adds a friendly on-page panel to your DreamJourney chats and bot pages — for tracking, tidying, writing and building. All data is stored locally on your device; nothing is uploaded anywhere (the only exception is the optional **Quill** assistant, which talks to a language model *you* choose and connect).
+
+> The extension lives in the `Sunny's DJ Toolkit V2.1/` folder. See its [README](./Sunny's%20DJ%20Toolkit%20V2.1/README.md) for the full breakdown.
+
+       ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
+
+## 💬 Chat Tools
+
+**Stats + Nexus reminder** — tracks your message counts and rerolls per chat, and shows how many messages have passed since your last Nexus check. Turns orange then red as you get further from it.
+
+**Save regenerations** — saves previous bot replies before they disappear when you regen. Browse them and swap one back in with one click.
+
+**User Input Recovery** — autosaves what you're typing, and keeps your last 5 sent messages, so a crash, timeout, or Stop-Generation never loses your words.
+
+**Auto-refresh on Stop** — a 3-second countdown to refresh after stopping a generation, clearing the duplicate/missing-message errors that can cause.
+
+**Delete Thinking** *(Nyx and Athena only)* — removes the thinking block from a message once you're done with it.
+
+**Download chat** — exports the full conversation as a .txt with the character's name on each message.
+
+## 🛠️ Creator Tools
+
+**Export / Import bot** — back up a bot to JSON and restore it, dropdowns and toggles included.
+**Lorebook tools** — load saved lorebooks, test which entries a message triggers, and watch a live token budget.
+**Lorebook Workshop** — merge, wrap and unwrap lorebooks in one page.
+
+## ✒️ Quill *(optional — bring your own model)*
+
+Quill connects Aster to a language model **you** choose — local (Ollama, LM Studio, koboldcpp) or a paid OpenAI-compatible API. **Aster has no AI of its own**; Quill is just the pipe.
+
+- **Improve my message** — light grammar fixes up to a full in-character rewrite.
+- **Summarize chat** — recent messages (or the whole chat) into factual bullet points.
+- **Character Lens** — an analytical second read of your bot's files (never rewrites them for you).
+- **Import a character** — convert a SillyTavern card (`.png`/`.json`) or text bot into DreamJourney's template.
+
+       ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
+
+## 📦 Install (unpacked)
+
+1. Download / clone this repo.
+2. Go to `chrome://extensions` and enable **Developer mode**.
+3. **Load unpacked** → select the `Sunny's DJ Toolkit V2.1` folder.
+4. Open a DreamJourney chat — the panel appears automatically. Click the Aster icon in your browser bar for settings.
+
+## 🖥️ Browser support
+
 Works on Chrome, Edge, Brave, and any other Chromium-based browser.
-Firefox is not recommended for testing. Extensions installed manually on Firefox reset completely when the browser closes, so stats and saved data won't carry over between sessions.
-Mobile browsers don't support extensions without the webstore afaik, so this is desktop only for now.
+Firefox is not recommended: manually-installed extensions reset when the browser closes, so stats and saved data won't carry over.
+Mobile browsers don't support extensions, so this is desktop only for now.
 
        ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
+
+🌻 **[Visit Sunflower Fields](https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/index.html)**
