@@ -241,6 +241,16 @@
         <li><strong>Remove Wrapping</strong>: the undo button, puts a wrapped lorebook back to normal.</li>
         <li><strong>Format Checker</strong>: won't import into DreamJourney? Paste it here to find the exact problem (missing fields, an entry with no triggers, a stray comma).</li>
       </ol>
+      <p style="margin-top:10px"><strong>What counts as a wrapped (ignored) trigger?</strong> Using <code>trigger</code> as the example, any of these is skipped &mdash; it won't fire a direct match <em>or</em> a cascade:</p>
+      <div style="margin:8px 0;padding:11px 15px;background:var(--surface,rgba(255,255,255,0.05));border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:8px;font-family:ui-monospace,monospace;font-size:13.5px;line-height:2">
+        <div>_trigger</div>
+        <div>trigger_</div>
+        <div>_trigger_</div>
+        <div>/trigger/</div>
+        <div>-trigger-</div>
+        <div>&lt;trigger&gt;</div>
+      </div>
+      <p style="font-size:13px;color:var(--soft,#a1a1aa)">Underscore is the safest, and what <strong>Wrap All Triggers</strong> uses: a trigger touching <code>_</code> on <em>either</em> side is ignored, so it even protects a word inside a phrase &mdash; e.g. <code>_Imperium Divinum_</code> stops <em>both</em> words from triggering. The other three (<code>/&hellip;/</code>, <code>-&hellip;-</code>, <code>&lt;&hellip;&gt;</code>) need the wrap on <em>both</em> sides.</p>
       <p>Always paste the result back into DreamJourney yourself, so you stay in control.</p>
     </div>
   </div>
