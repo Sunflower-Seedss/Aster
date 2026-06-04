@@ -1278,7 +1278,7 @@
     { label:'Tighter',              text:'Make it more concise and economical without losing meaning.' },
     { label:'Immersive RP',         text:'Write it as immersive first-person roleplay prose in present tense.' }
   ];
-  const quillState = { strength:2, tone:'none', length:'medium', sumCount:10 };
+  const quillState = { strength:2, tone:'none', length:'medium', sumCount:10, pov:'first', tense:'present' };
   let quillImportFile = null, quillImportBot = null;
 
   // Round-trip a chat request through the background service worker (the
@@ -1296,10 +1296,23 @@
     });
   }
 
-  function quillImproveSystem(strength, tone, length, persona) {
+  // Strip a single pair of wrapping quotes (straight or curly) some models add.
+  function stripWrapQuotes(s) {
+    s = (s || '').trim();
+    const pairs = [['"','"'], ['“','”'], ["'","'"], ['‘','’']];
+    for (const [a,b] of pairs) { if (s.length > 1 && s[0]===a && s[s.length-1]===b) { return s.slice(1,-1).trim(); } }
+    return s;
+  }
+
+  function quillImproveSystem(strength, tone, length, persona, pov, tense) {
+    const asName = (pov === 'third') ? 'them (third person)' : 'the user (first person)';
     const personaLine = (persona && persona.trim())
-      ? `You are writing in first person AS this character: ${persona.trim()} Stay true to their voice, personality, knowledge and perspective at all times.`
+      ? `You are writing AS this character: ${persona.trim()} Stay true to their voice, personality, knowledge and perspective at all times.`
       : '';
+    const povLine = (pov === 'third')
+      ? 'Write in the THIRD person (he/she/they) — refer to the user by their persona name or an appropriate pronoun, never "I".'
+      : 'Write in the FIRST person as the user ("I").';
+    const tenseLine = (tense === 'past') ? 'Write in the PAST tense.' : 'Write in the PRESENT tense.';
     const rules = {
       1:'Make ONLY minimal corrections: spelling, punctuation and obvious grammar. Keep the wording, length and style essentially identical.',
       2:"Lightly polish grammar and phrasing for readability. Keep the user's wording and length close to the original.",
@@ -1312,9 +1325,10 @@
     return [
       'You are Quill, a writing assistant embedded in a roleplay chat tool. You improve the USER\'s own message before they send it.',
       personaLine,
+      povLine, tenseLine,
       rules[strength] || rules[2], toneLine, lenLine,
-      'Hard rules: stay in first person as the user. NEVER write dialogue or actions for the bot or any other character. NEVER answer the message or continue the scene. NEVER add plot points, locations, or outcomes the user did not state or clearly imply.',
-      'Output ONLY the improved message text: no preamble, no quotation marks, no explanation, no alternatives.'
+      `Hard rules: keep the message about ${asName}. NEVER write dialogue or actions for the bot or any other character. NEVER answer the message or continue the scene. NEVER add plot points, locations, or outcomes the user did not state or clearly imply.`,
+      'Output ONLY the improved message text: no preamble, no surrounding quotation marks, no explanation, no alternatives.'
     ].filter(Boolean).join(' ');
   }
 
@@ -1400,6 +1414,8 @@
     seg('djt-quill-strength', v=>{ quillState.strength=+v; const h=document.getElementById('djt-quill-strength-hint'); if(h) h.innerHTML=QUILL_STRENGTH_HINTS[v]||''; });
     seg('djt-quill-tone',     v=>{ quillState.tone=v; });
     seg('djt-quill-length',   v=>{ quillState.length=v; });
+    seg('djt-quill-pov',      v=>{ quillState.pov=v; });
+    seg('djt-quill-tense',    v=>{ quillState.tense=v; });
     seg('djt-quill-sumcount', v=>{ quillState.sumCount=+v; });
 
     const presetSel=document.getElementById('djt-quill-preset');
@@ -1436,7 +1452,7 @@
     if(!draft){ setQuillStatus('Type a message in the chat box first.','bad'); return; }
     const lb=lastBot(); const lastBotText=lb?msgText(lb):'';
     const customEl=document.getElementById('djt-quill-custom'); const custom=customEl?(customEl.value||'').trim():'';
-    const sys=quillImproveSystem(quillState.strength, quillState.tone, quillState.length, store.quillPersona);
+    const sys=quillImproveSystem(quillState.strength, quillState.tone, quillState.length, store.quillPersona, quillState.pov, quillState.tense);
     const ctx = lastBotText ? `For context, the bot's last message was:\n"""${lastBotText.slice(0,1600)}"""\n\n` : '';
     const extra = custom ? `Extra instruction from me: ${custom}\n\n` : '';
     const user = `${ctx}${extra}Here is my draft message to improve:\n"""${draft}"""`;
@@ -1449,7 +1465,7 @@
     if(!res.ok){ setQuillStatus('Quill error: '+res.error,'bad'); return; }
     setQuillStatus('');
     const out=document.getElementById('djt-quill-out'); const t=document.getElementById('djt-quill-out-text');
-    if(t) t.textContent=(res.text||'').trim(); if(out) out.style.display='';
+    if(t) t.textContent=stripWrapQuotes(res.text); if(out) out.style.display='';
   }
 
   async function runQuillSummarize() {
@@ -1458,6 +1474,16 @@
     if(fromStart){
       const ok=await djtConfirm('Summarize from the start?', 'When summarizing large chats, the output will be entirely dependent on the size and context window of the model you have attached to Quill. Very long chats may be truncated or lose detail.');
       if(!ok) return;
+      // Load the whole history first (DJ virtualizes older messages out of the DOM,
+      // so without this "from the start" would only see the loaded window). Reuses
+      // the pulse loader; scroll back to the bottom afterwards.
+      const sc=getContainer();
+      if(sc){
+        const btn0=document.getElementById('djt-quill-summarize'); if(btn0){ btn0.disabled=true; btn0.textContent='Loading full chat…'; }
+        setQuillStatus('Loading the full chat into view…','busy');
+        try { await scrollToTop(sc); } catch(e){}
+        sc.scrollTop = sc.scrollHeight;
+      }
     }
     const transcript=quillTranscript(quillState.sumCount, fromStart);
     if(!transcript){ setQuillStatus('No messages to summarize yet.','bad'); return; }
@@ -1782,6 +1808,14 @@
                 `<div class="djt-quill-lab">Length</div>` +
                 `<div class="djt-seg" id="djt-quill-length">` +
                   [['short','Short'],['medium','Medium'],['long','Long']].map(l=>`<button data-v="${l[0]}"${l[0]==='medium'?' class="on"':''}>${l[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Point of view</div>` +
+                `<div class="djt-seg" id="djt-quill-pov">` +
+                  [['first','First person (I)'],['third','Third person']].map(p=>`<button data-v="${p[0]}"${p[0]==='first'?' class="on"':''}>${p[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Tense</div>` +
+                `<div class="djt-seg" id="djt-quill-tense">` +
+                  [['present','Present'],['past','Past']].map(p=>`<button data-v="${p[0]}"${p[0]==='present'?' class="on"':''}>${p[1]}</button>`).join('') +
                 `</div>` +
                 `<div class="djt-quill-lab">Tell Quill what you want <span class="djt-quill-cc" id="djt-quill-cc">0/500</span></div>` +
                 `<select id="djt-quill-preset" class="djt-quill-select"><option value="">Load a preset…</option></select>` +
