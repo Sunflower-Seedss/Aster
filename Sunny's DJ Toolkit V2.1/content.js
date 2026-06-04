@@ -40,7 +40,8 @@
     regenHistory: { versions: [], current: 0 },
     scratch: '',
     scratchHistory: [],      // up to 5 most-recent SENT messages
-    countsSnapshot: { user: 0, bot: 0, total: 0 }
+    countsSnapshot: { user: 0, bot: 0, total: 0 },
+    quillPersona: ''         // per-session: who Quill writes AS (max 500 chars)
   };
 
   let settings = Object.assign({}, DEFAULT_SETTINGS);
@@ -1293,7 +1294,10 @@
     });
   }
 
-  function quillImproveSystem(strength, tone, length) {
+  function quillImproveSystem(strength, tone, length, persona) {
+    const personaLine = (persona && persona.trim())
+      ? `You are writing in first person AS this character: ${persona.trim()} Stay true to their voice, personality, knowledge and perspective at all times.`
+      : '';
     const rules = {
       1:'Make ONLY minimal corrections: spelling, punctuation and obvious grammar. Keep the wording, length and style essentially identical.',
       2:"Lightly polish grammar and phrasing for readability. Keep the user's wording and length close to the original.",
@@ -1305,6 +1309,7 @@
     const lenLine = { short:'Keep it short, roughly 1-2 sentences.', medium:'Keep it to a short paragraph.', long:'A fuller paragraph is fine, but do not pad it out.' }[length] || '';
     return [
       'You are Quill, a writing assistant embedded in a roleplay chat tool. You improve the USER\'s own message before they send it.',
+      personaLine,
       rules[strength] || rules[2], toneLine, lenLine,
       'Hard rules: stay in first person as the user. NEVER write dialogue or actions for the bot or any other character. NEVER answer the message or continue the scene. NEVER add plot points, locations, or outcomes the user did not state or clearly imply.',
       'Output ONLY the improved message text: no preamble, no quotation marks, no explanation, no alternatives.'
@@ -1349,6 +1354,10 @@
     const ta=document.getElementById('djt-quill-custom'); const cc=document.getElementById('djt-quill-cc');
     if(ta&&cc) cc.textContent=(ta.value||'').length+'/500';
   }
+  function updateQuillPCC() {
+    const ta=document.getElementById('djt-quill-persona'); const cc=document.getElementById('djt-quill-pcc');
+    if(ta&&cc) cc.textContent=(ta.value||'').length+'/500';
+  }
   function quillBindCopy(btnId, textId) {
     const b=document.getElementById(btnId); if(!b) return;
     b.addEventListener('click', ()=>{ const t=document.getElementById(textId); if(!t||!t.textContent) return; try{ navigator.clipboard.writeText(t.textContent); toast('Copied.'); }catch(e){ toast('Copy failed.'); } });
@@ -1367,6 +1376,14 @@
       presetSel.addEventListener('change', ()=>{ if(presetSel.value==='') return; const ta=document.getElementById('djt-quill-custom'); if(ta){ ta.value=QUILL_PRESETS[+presetSel.value].text; updateQuillCC(); } presetSel.value=''; });
     }
     const custom=document.getElementById('djt-quill-custom'); if(custom) custom.addEventListener('input', updateQuillCC);
+
+    // Persona: load from the per-session store, save back as the user types.
+    const persona=document.getElementById('djt-quill-persona');
+    if(persona){
+      persona.value=store.quillPersona||'';
+      updateQuillPCC();
+      persona.addEventListener('input', ()=>{ updateQuillPCC(); store.quillPersona=(persona.value||'').slice(0,500); saveStore(); });
+    }
 
     const improveBtn=document.getElementById('djt-quill-improve'); if(improveBtn) improveBtn.addEventListener('click', runQuillImprove);
     const useBtn=document.getElementById('djt-quill-use'); if(useBtn) useBtn.addEventListener('click', ()=>{ const ta=document.querySelector('textarea[placeholder="Send your message..."]'); const t=document.getElementById('djt-quill-out-text'); if(ta&&t){ setReactValue(ta,t.textContent); ta.focus(); toast('Applied to your message box.'); } else { toast('Could not find the chat box.'); } });
@@ -1387,7 +1404,7 @@
     if(!draft){ setQuillStatus('Type a message in the chat box first.','bad'); return; }
     const lb=lastBot(); const lastBotText=lb?msgText(lb):'';
     const customEl=document.getElementById('djt-quill-custom'); const custom=customEl?(customEl.value||'').trim():'';
-    const sys=quillImproveSystem(quillState.strength, quillState.tone, quillState.length);
+    const sys=quillImproveSystem(quillState.strength, quillState.tone, quillState.length, store.quillPersona);
     const ctx = lastBotText ? `For context, the bot's last message was:\n"""${lastBotText.slice(0,1600)}"""\n\n` : '';
     const extra = custom ? `Extra instruction from me: ${custom}\n\n` : '';
     const user = `${ctx}${extra}Here is my draft message to improve:\n"""${draft}"""`;
@@ -1546,6 +1563,11 @@
             `<div class="djt-card-body">` +
               `<div id="djt-quill-chat-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
               `<div id="djt-quill-chat-main" style="display:none">` +
+                // Persona (per-session: who Quill writes as)
+                `<div class="djt-quill-lab">Your persona <span class="djt-quill-cc" id="djt-quill-pcc">0/500</span></div>` +
+                `<div class="djt-quill-cap">Who Quill writes as in this chat. Saved to this session.</div>` +
+                `<textarea id="djt-quill-persona" class="djt-quill-ta" maxlength="500" placeholder="e.g. Mara, 28, a sharp-tongued field medic who hides nerves behind dry humour."></textarea>` +
+                `<div class="djt-quill-divider"></div>` +
                 // Improve my message
                 `<div class="djt-quill-sub">Improve my message</div>` +
                 `<div class="djt-quill-cap">Polishes the text in your message box, using the bot's last message as context.</div>` +
