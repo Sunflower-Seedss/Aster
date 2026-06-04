@@ -267,9 +267,28 @@ Quill connects the toolkit to a model the **user** supplies (local or API). The 
 
 Same codebase, loaded on **Kiwi Browser or Lemur Browser** (Chromium for Android, from a zip). Touch drag/resize already built in. On mobile, **Quill only works with an API backend** (local servers need a computer). Packaged in `../dist/Aster-Mobile.zip`.
 
+## Live test results (100-message chat, 2026-06-04)
+
+Full QA run as a user (persona "Hailey") vs the "Hideo" bot, model unslopnemo, 50/50 = 100 on the counter, 3 rerolls. Everything driven through the live panel via the Chrome MCP.
+
+**Confirmed working:**
+- **Hard-refresh freeze fix — PASSED on a real chat.** After a mid-chat reload: 30/30/60, NOT frozen N/0/N; bot detection survived hydration; rerolls persisted. The bug that started this project is genuinely fixed.
+- **Reroll ×3:** counter incremented each time, saved-replies panel populated (2/2), regenerated text differed, recovered a character-break misfire. The previously-intermittent Rerolls counter was rock-solid. The greeting/duplicate-node bug did NOT reproduce.
+- **Live stats** matched the DOM exactly on every check.
+- **Quill improve:** works; persona injection excellent (rewrites pulled the persona's hazel eyes/freckles). Strength 5 = full rewrite; strength 2 = preserves POV + grammar cleanup. "Use this" → send round-trip works.
+- **Quill summarize (count=20):** excellent, structured, accurate, no invention. "From the start" confirm-modal warning works.
+- **Per-session persona** loads and feeds Quill correctly.
+
+**Findings / limitations to fix (NONE are crashes — Aster is solid):**
+1. **Counter is DOM-based + DJ virtualizes.** During an active session it accumulates fine, but DJ unmounts older messages, so a refresh re-bases the count down and on long chats "total" reflects the loaded window, not a lifetime tally. Document this and/or scroll-to-load before counting.
+2. **Quill "from the start" only saw the loaded window** — on the 100-msg chat it summarized only the recent section and MISSED the early scenes (virtualization had unmounted them). FIX: reuse the existing scroll-to-top loader to mount the full history before summarizing/counting.
+3. **Extension ID changes on reload-from-new-path** (it did, after the folder rename: new id `bjknlj…`), which broke `OLLAMA_ORIGINS` → Quill HTTP 403. FIX: add a stable `"key"` to manifest.json so the ID is fixed regardless of path. (After adding the key, update OLLAMA_ORIGINS to the new stable ID once and it never breaks again.)
+4. **Quill improve defaults to first-person present** (clashes with third-person-past chats) and mistral-nemo sometimes wraps output in stray quotes. FIX: optional POV/tense control + defensively strip leading/trailing quotes from improve output.
+5. **Local-model summaries are slow** (~90s on a 12B). UI handled it gracefully (persistent status). An API backend would be far snappier.
+
 ## Open / known issues (NOT yet fixed)
 
-- **Reroll / greeting-as-option + intermittent Rerolls counter:** DJ renders each message as two same-id nodes (2nd lacks the avatar) and rerolling appends a new-id node instead of replacing in place, so `findRegenTarget()` can read the old (unchanged) reply → duplicate-guard skips capture. Candidate fix: harden `isBot`/`getMessages` against duplicate nodes + make regen capture robust to the new-id behavior. Not reproduced fully last attempt.
+- **Reroll / greeting-as-option + intermittent Rerolls counter:** DJ renders each message as two same-id nodes (2nd lacks the avatar) and rerolling appends a new-id node instead of replacing in place, so `findRegenTarget()` can read the old (unchanged) reply → duplicate-guard skips capture. Candidate fix: harden `isBot`/`getMessages` against duplicate nodes + make regen capture robust to the new-id behavior. **Did NOT reproduce in the 2026-06-04 100-message run** (all 3 rerolls behaved correctly) — may be model/timing specific.
 - **Use button feedback**: Lorebook library "Use" button shows no visual feedback during load.
 
 ## Release state
