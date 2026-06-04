@@ -1,15 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "Sunny's Dreamjourney Toolkit V2",
+  "name": "Aster",
   "version": "2.1",
-  "description": "Quality-of-life tools for DreamJourney AI chat sessions. Local-only. Made by SunflowerS.",
+  "description": "Aster — quality-of-life tools for DreamJourney AI: chat stats, saved replies, lorebook tools, and Quill (connect your own local/API model). Local-only. Made by SunflowerS.",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
     "https://www.dreamjourneyai.com/*",
-    "https://dreamjourneyai.com/*"
+    "https://dreamjourneyai.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -27,7 +36,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Sunny's Dreamjourney Toolkit V2",
+    "default_title": "Aster",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -49,12 +58,14 @@
         "lorebook-studio.html",
         "lorebook-studio.js",
         "creator-tools-help.html",
+        "quill-guide.html",
         "dj-bridge.js",
         "icons/icon16.png",
         "icons/icon32.png",
         "icons/icon48.png",
         "icons/icon128.png",
         "icons/sun64.png",
+        "icons/quill.png",
         "icons/chibi140.png",
         "icons/bg-light.jpg",
         "icons/bg-dark.jpg"

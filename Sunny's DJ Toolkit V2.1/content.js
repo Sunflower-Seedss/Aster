@@ -1,5 +1,5 @@
 // ============================================================
-//  Sunny's Dreamjourney Toolkit V2 - content script v3.0
+//  Aster - content script v3.0
 //  Made by SunflowerS at Dreamjourney AI
 // ============================================================
 (function () {
@@ -15,14 +15,34 @@
   const DEFAULT_SETTINGS = {
     theme: 'dark', saveRegens: true, stats: true, nexus: true,
     scratchpad: true, autoRefresh: true, deleteThinking: false,
-    panelPos: null, panelSize: null, activeTab: 'chat', cardCollapsed: {}, scanActive: false, lorebookLibrary: [], skin: 'dreamjourney'
+    panelPos: null, panelSize: null, activeTab: 'chat', cardCollapsed: {}, scanActive: false, lorebookLibrary: [], skin: 'dreamjourney',
+    // Visibility: map of section-id -> true when the user has hidden it from the
+    // pop-out panel via the Settings Window. Absent/false = visible. Honored in Stage 2.
+    hidden: {},
+    // Quill (local-LLM / optional API helper). Connection is configured in the
+    // Settings Window; the tool UI lives in the pop-out under Advanced.
+    // backend: 'ollama' | 'openai' | 'lmstudio' | 'kobold' | 'api'
+    quill: {
+      enabled: false,
+      ack: false,          // user has read the Quill guide + safety note
+      backend: 'ollama',
+      ollamaUrl: 'http://localhost:11434',
+      ollamaModel: '',
+      lmstudioUrl: 'http://localhost:1234',
+      lmstudioModel: '',
+      koboldUrl: 'http://localhost:5001',
+      openaiBaseUrl: 'https://api.openai.com/v1',
+      openaiModel: 'gpt-4o-mini',
+      apiKey: ''            // user-entered, stored locally only
+    }
   };
   const DEFAULT_STORE = {
     rerolls: 0, sinceNexus: 0,
     regenHistory: { versions: [], current: 0 },
     scratch: '',
     scratchHistory: [],      // up to 5 most-recent SENT messages
-    countsSnapshot: { user: 0, bot: 0, total: 0 }
+    countsSnapshot: { user: 0, bot: 0, total: 0 },
+    quillPersona: ''         // per-session: who Quill writes AS (max 500 chars)
   };
 
   let settings = Object.assign({}, DEFAULT_SETTINGS);
@@ -37,6 +57,9 @@
           store    = Object.assign({}, DEFAULT_STORE, (data && data[storeKey()]) || {});
           settings = Object.assign({}, DEFAULT_SETTINGS, (data && data[SETTINGS_KEY]) || {});
           if (!settings.cardCollapsed || typeof settings.cardCollapsed !== 'object') settings.cardCollapsed = {};
+          if (!settings.hidden || typeof settings.hidden !== 'object') settings.hidden = {};
+          // Deep-merge quill so new default keys survive an older stored partial.
+          settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, (settings.quill && typeof settings.quill === 'object') ? settings.quill : {});
           if (!store.regenHistory || !Array.isArray(store.regenHistory.versions))
             store.regenHistory = { versions: [], current: 0 };
           if (!Array.isArray(store.scratchHistory)) store.scratchHistory = [];
@@ -495,7 +518,7 @@
       const name = backBtn?.parentElement?.querySelector('p[class*="font-bold"]')?.innerText?.trim();
       return (name || '').slice(0, 50) || 'Bot';
     })();
-    const lines = ["Sunny's Dreamjourney Toolkit V2 Chat Export",
+    const lines = ["Aster Chat Export",
       'Made by SunflowerS at Dreamjourney AI', 'Character: ' + charName,
       'Session: ' + currentSessionId, 'Exported: ' + new Date().toLocaleString(),
       ''.padEnd(60, '-'), ''];
@@ -1243,6 +1266,403 @@
   const toggleRow = (key, label) =>
     `<div class="djt-toggle-row"><span>${label}</span><label class="djt-switch"><input type="checkbox" id="djt-t-${key}" checked><span class="djt-slider"></span></label></div>`;
 
+  // ---- QUILL (local-LLM / API writing helper) ----------------
+  const QUILL_STRENGTH_HINTS = {
+    1:'Grammar &amp; spelling only', 2:'Light polish', 3:'Improve flow &amp; clarity',
+    4:'Rewrite, keep my meaning', 5:'Full creative rewrite from a rough note'
+  };
+  const QUILL_PRESETS = [
+    { label:'Keep my voice',        text:'Preserve my personal writing voice and vocabulary. Only elevate clarity and flow.' },
+    { label:'More vivid',           text:'Add sensory detail and stronger verbs, but keep my actions and intent exactly as written.' },
+    { label:"Match the bot's tone", text:"Mirror the tone, register and energy of the bot's last message." },
+    { label:'Tighter',              text:'Make it more concise and economical without losing meaning.' },
+    { label:'Immersive RP',         text:'Write it as immersive first-person roleplay prose in present tense.' }
+  ];
+  const quillState = { strength:2, tone:'none', length:'medium', sumCount:10 };
+  let quillImportFile = null, quillImportBot = null;
+
+  // Round-trip a chat request through the background service worker (the
+  // network boundary that dodges the HTTPS page's mixed-content/CORS block).
+  function quillChat(system, user, opts) {
+    return new Promise(resolve => {
+      let done=false; const finish=r=>{ if(done) return; done=true; resolve(r); };
+      try {
+        chrome.runtime.sendMessage(
+          { type:'quill.chat', cfg:settings.quill, messages:[{role:'system',content:system},{role:'user',content:user}], opts:opts||{} },
+          res => { if(chrome.runtime.lastError){ finish({ok:false,error:chrome.runtime.lastError.message}); return; } finish(res||{ok:false,error:'No response from the Quill worker.'}); }
+        );
+      } catch(e){ finish({ok:false,error:String(e&&e.message||e)}); }
+      setTimeout(()=>finish({ok:false,error:'Timed out waiting for the model (is it still loading?).'}), 120000);
+    });
+  }
+
+  function quillImproveSystem(strength, tone, length, persona) {
+    const personaLine = (persona && persona.trim())
+      ? `You are writing in first person AS this character: ${persona.trim()} Stay true to their voice, personality, knowledge and perspective at all times.`
+      : '';
+    const rules = {
+      1:'Make ONLY minimal corrections: spelling, punctuation and obvious grammar. Keep the wording, length and style essentially identical.',
+      2:"Lightly polish grammar and phrasing for readability. Keep the user's wording and length close to the original.",
+      3:'Improve flow, clarity and word choice. You may restructure sentences, but keep the same events, length and intent.',
+      4:'Rewrite the message into stronger prose while preserving every action, intent and fact the user stated. Do not add new events.',
+      5:'Fully rewrite the user\'s rough note into a polished, vivid but ACCURATE short paragraph. Expand only on what the user implied (for example "I go and sit down" may become a richer description of them sitting down) without inventing new plot, new characters, locations, or outcomes the user did not state.'
+    };
+    const toneLine = (tone && tone!=='none') ? `Write in a ${tone} tone.` : '';
+    const lenLine = { short:'Keep it short, roughly 1-2 sentences.', medium:'Keep it to a short paragraph.', long:'A fuller paragraph is fine, but do not pad it out.' }[length] || '';
+    return [
+      'You are Quill, a writing assistant embedded in a roleplay chat tool. You improve the USER\'s own message before they send it.',
+      personaLine,
+      rules[strength] || rules[2], toneLine, lenLine,
+      'Hard rules: stay in first person as the user. NEVER write dialogue or actions for the bot or any other character. NEVER answer the message or continue the scene. NEVER add plot points, locations, or outcomes the user did not state or clearly imply.',
+      'Output ONLY the improved message text: no preamble, no quotation marks, no explanation, no alternatives.'
+    ].filter(Boolean).join(' ');
+  }
+
+  function quillSummarizeSystem() {
+    return [
+      'You are Quill, a writing assistant embedded in a roleplay chat tool.',
+      'Summarize the conversation transcript the user provides into clear, concise KEY BULLET POINTS.',
+      'Capture important events, decisions, character states and relationships, locations, and any unresolved threads, in rough chronological order.',
+      'Be strictly factual to the transcript. Do NOT invent details, do NOT speculate, and do NOT continue the story.',
+      'Output ONLY a bulleted list using "- " for each point. No preamble and no closing remarks.'
+    ].join(' ');
+  }
+
+  function quillReviewSystem() {
+    return [
+      'You are Quill, an analytical writing assistant embedded in a character-creation tool. A creator is worried their character behaves wrongly. Your job is to examine the character files like an editor, NOT to take the creator\'s word for it.',
+      'CRITICAL — do not show bias toward the creator. Do NOT simply agree that the problem exists or flatter them. Read the actual text and judge it on its own terms. If the wording does not support their complaint, say so plainly.',
+      'Look for wording that a language model might MISINTERPRET or over-weight, even if a human reads it fine. Watch for loaded or ambiguous words, repetition that over-emphasises a trait, instructions that pull harder than intended, or traits stated in one section but contradicted in another. (For example, words like "routine" and "schedule" can nudge a model toward number/measurement obsession when the creator only meant the character is habit-driven.) Explain WHY each flagged phrase could be read the way it is.',
+      'If you find no clear issue, or the issue you find is minor and may not explain what the creator is seeing, say so honestly. Then encourage them to test properly before changing the files: try a different system prompt, different settings, and especially a DIFFERENT MODEL. Explain the logic: if the same problem appears across several models and settings, it IS likely the character files (its "guts") need tweaking; if it only happens on one model or setting, then finding the right model/setting will help far more than rewriting the character.',
+      'HARD RULE — you NEVER rewrite the character\'s files for them. You may pinpoint phrases and suggest the KIND of change to consider, but you do not produce rewritten descriptions, instructions, or a finished bot. If the creator asks you to "just rewrite it", gently decline and encourage them to make the change themselves — creating a character is a human craft and the creator understands their intent best.',
+      'Be critical of model output in general: remind them that models can misread good writing, so a flagged phrase is a hypothesis to test, not a proven fault. Be constructive and encouraging, never harsh.',
+      'Structure your answer with short clear sections, e.g. "What I checked", "Phrases worth a look (and why)", and "If this isn\'t it — how to test". Keep it focused and practical.'
+    ].join(' ');
+  }
+
+  function setQuillCreatorStatus(msg, kind) {
+    const el=document.getElementById('djt-quill-creator-status'); if(!el) return;
+    el.textContent=msg||''; el.className='djt-quill-status'+(kind?' '+kind:'');
+  }
+
+  // Pull the character "guts" from the bot form via the page bridge, trimmed
+  // for a local model's context window.
+  function quillBotGutsText(bot) {
+    const cap=(s,n)=>{ s=(s==null?'':String(s)).trim(); return s.length>n ? s.slice(0,n)+' …[truncated]' : s; };
+    const parts=[];
+    if(bot.name) parts.push('[NAME]: '+cap(bot.name,120));
+    if(bot.introduction) parts.push('[INTRODUCTION / FIRST MESSAGE]:\n"""'+cap(bot.introduction,1500)+'"""');
+    if(bot.description) parts.push('[DESCRIPTION / PERSONA]:\n"""'+cap(bot.description,3500)+'"""');
+    if(bot.instructions) parts.push('[INSTRUCTIONS]:\n"""'+cap(bot.instructions,2500)+'"""');
+    if(bot.context) parts.push('[CONTEXT]:\n"""'+cap(bot.context,1500)+'"""');
+    if(bot.examples) parts.push('[EXAMPLE DIALOGUE]:\n"""'+cap(bot.examples,2000)+'"""');
+    if(bot.authorNote) parts.push('[AUTHOR NOTE]:\n"""'+cap(bot.authorNote,1000)+'"""');
+    return parts.join('\n\n');
+  }
+
+  // Build a plain-text transcript of the last N messages (or all) for summarizing.
+  function quillTranscript(n, fromStart) {
+    const ms = getMessages();
+    const slice = fromStart ? ms : ms.slice(Math.max(0, ms.length - n));
+    return slice.map(el => (isBot(el) ? 'BOT: ' : 'USER: ') + msgText(el)).filter(s => s.length > 5).join('\n\n');
+  }
+
+  function quillEnabled() { return !!(settings.quill && settings.quill.enabled); }
+
+  function setQuillStatus(msg, kind) {
+    const el = document.getElementById('djt-quill-status'); if(!el) return;
+    el.textContent = msg || ''; el.className = 'djt-quill-status' + (kind ? ' '+kind : '');
+  }
+
+  function refreshQuillUI() {
+    const on = quillEnabled();
+    [['djt-quill-chat-off','djt-quill-chat-main'], ['djt-quill-creator-off','djt-quill-creator-main'], ['djt-quill-import-off','djt-quill-import-main']].forEach(pair => {
+      const off=document.getElementById(pair[0]); const main=document.getElementById(pair[1]);
+      if (off && main) { off.style.display = on ? 'none' : ''; main.style.display = on ? '' : 'none'; }
+    });
+  }
+
+  function updateQuillCC() {
+    const ta=document.getElementById('djt-quill-custom'); const cc=document.getElementById('djt-quill-cc');
+    if(ta&&cc) cc.textContent=(ta.value||'').length+'/500';
+  }
+  function updateQuillPCC() {
+    const ta=document.getElementById('djt-quill-persona'); const cc=document.getElementById('djt-quill-pcc');
+    if(ta&&cc) cc.textContent=(ta.value||'').length+'/500';
+  }
+  function quillBindCopy(btnId, textId) {
+    const b=document.getElementById(btnId); if(!b) return;
+    b.addEventListener('click', ()=>{ const t=document.getElementById(textId); if(!t||!t.textContent) return; try{ navigator.clipboard.writeText(t.textContent); toast('Copied.'); }catch(e){ toast('Copy failed.'); } });
+  }
+
+  function wireQuillChat() {
+    const seg=(id,onPick)=>{ const wrap=document.getElementById(id); if(!wrap) return; wrap.addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; [...wrap.querySelectorAll('button')].forEach(x=>x.classList.toggle('on', x===b)); onPick(b.dataset.v); }); };
+    seg('djt-quill-strength', v=>{ quillState.strength=+v; const h=document.getElementById('djt-quill-strength-hint'); if(h) h.innerHTML=QUILL_STRENGTH_HINTS[v]||''; });
+    seg('djt-quill-tone',     v=>{ quillState.tone=v; });
+    seg('djt-quill-length',   v=>{ quillState.length=v; });
+    seg('djt-quill-sumcount', v=>{ quillState.sumCount=+v; });
+
+    const presetSel=document.getElementById('djt-quill-preset');
+    if(presetSel){
+      QUILL_PRESETS.forEach((p,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=p.label; presetSel.appendChild(o); });
+      presetSel.addEventListener('change', ()=>{ if(presetSel.value==='') return; const ta=document.getElementById('djt-quill-custom'); if(ta){ ta.value=QUILL_PRESETS[+presetSel.value].text; updateQuillCC(); } presetSel.value=''; });
+    }
+    const custom=document.getElementById('djt-quill-custom'); if(custom) custom.addEventListener('input', updateQuillCC);
+
+    // Persona: load from the per-session store, save back as the user types.
+    const persona=document.getElementById('djt-quill-persona');
+    if(persona){
+      persona.value=store.quillPersona||'';
+      updateQuillPCC();
+      persona.addEventListener('input', ()=>{ updateQuillPCC(); store.quillPersona=(persona.value||'').slice(0,500); saveStore(); });
+    }
+
+    const improveBtn=document.getElementById('djt-quill-improve'); if(improveBtn) improveBtn.addEventListener('click', runQuillImprove);
+    const useBtn=document.getElementById('djt-quill-use'); if(useBtn) useBtn.addEventListener('click', ()=>{ const ta=document.querySelector('textarea[placeholder="Send your message..."]'); const t=document.getElementById('djt-quill-out-text'); if(ta&&t){ setReactValue(ta,t.textContent); ta.focus(); toast('Applied to your message box.'); } else { toast('Could not find the chat box.'); } });
+    quillBindCopy('djt-quill-copy','djt-quill-out-text');
+    const redoBtn=document.getElementById('djt-quill-redo'); if(redoBtn) redoBtn.addEventListener('click', runQuillImprove);
+    const cancelBtn=document.getElementById('djt-quill-cancel'); if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-out'); if(o) o.style.display='none'; });
+
+    const sumBtn=document.getElementById('djt-quill-summarize'); if(sumBtn) sumBtn.addEventListener('click', runQuillSummarize);
+    quillBindCopy('djt-quill-sum-copy','djt-quill-sum-text');
+    const sumDl=document.getElementById('djt-quill-sum-dl'); if(sumDl) sumDl.addEventListener('click', downloadQuillSummary);
+    const sumCancel=document.getElementById('djt-quill-sum-cancel'); if(sumCancel) sumCancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-sum-out'); if(o) o.style.display='none'; });
+  }
+
+  async function runQuillImprove() {
+    if(!quillEnabled()){ setQuillStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const ta=document.querySelector('textarea[placeholder="Send your message..."]');
+    const draft=ta?(ta.value||'').trim():'';
+    if(!draft){ setQuillStatus('Type a message in the chat box first.','bad'); return; }
+    const lb=lastBot(); const lastBotText=lb?msgText(lb):'';
+    const customEl=document.getElementById('djt-quill-custom'); const custom=customEl?(customEl.value||'').trim():'';
+    const sys=quillImproveSystem(quillState.strength, quillState.tone, quillState.length, store.quillPersona);
+    const ctx = lastBotText ? `For context, the bot's last message was:\n"""${lastBotText.slice(0,1600)}"""\n\n` : '';
+    const extra = custom ? `Extra instruction from me: ${custom}\n\n` : '';
+    const user = `${ctx}${extra}Here is my draft message to improve:\n"""${draft}"""`;
+    const maxTokens = {short:200,medium:450,long:800}[quillState.length]||450;
+    const btn=document.getElementById('djt-quill-improve');
+    if(btn){ btn.disabled=true; btn.textContent='Quill is writing…'; }
+    setQuillStatus('Asking '+(settings.quill.backend)+'…','busy');
+    const res=await quillChat(sys,user,{temperature:0.7,maxTokens});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#9997; Improve my message'; }
+    if(!res.ok){ setQuillStatus('Quill error: '+res.error,'bad'); return; }
+    setQuillStatus('');
+    const out=document.getElementById('djt-quill-out'); const t=document.getElementById('djt-quill-out-text');
+    if(t) t.textContent=(res.text||'').trim(); if(out) out.style.display='';
+  }
+
+  async function runQuillSummarize() {
+    if(!quillEnabled()){ setQuillStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const fromStart=!!(document.getElementById('djt-quill-fromstart')||{}).checked;
+    if(fromStart){
+      const ok=await djtConfirm('Summarize from the start?', 'When summarizing large chats, the output will be entirely dependent on the size and context window of the model you have attached to Quill. Very long chats may be truncated or lose detail.');
+      if(!ok) return;
+    }
+    const transcript=quillTranscript(quillState.sumCount, fromStart);
+    if(!transcript){ setQuillStatus('No messages to summarize yet.','bad'); return; }
+    const sys=quillSummarizeSystem();
+    const user='Transcript to summarize:\n\n'+transcript;
+    const maxTokens = fromStart ? 1200 : Math.min(1000, 250 + quillState.sumCount*40);
+    const btn=document.getElementById('djt-quill-summarize');
+    if(btn){ btn.disabled=true; btn.textContent='Quill is reading…'; }
+    setQuillStatus('Summarizing…','busy');
+    const res=await quillChat(sys,user,{temperature:0.3,maxTokens});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#128221; Summarize'; }
+    if(!res.ok){ setQuillStatus('Quill error: '+res.error,'bad'); return; }
+    setQuillStatus('');
+    const out=document.getElementById('djt-quill-sum-out'); const t=document.getElementById('djt-quill-sum-text');
+    if(t) t.textContent=(res.text||'').trim(); if(out) out.style.display='';
+  }
+
+  function downloadQuillSummary() {
+    const t=document.getElementById('djt-quill-sum-text'); if(!t||!t.textContent.trim()) return;
+    const header='Chat summary by Quill - Aster\nSession: '+(currentSessionId||'')+'\n'+''.padEnd(42,'-')+'\n\n';
+    const blob=new Blob([header+t.textContent], {type:'text/plain'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download='djt-summary-'+String(currentSessionId||'chat').slice(0,8)+'.txt'; a.click(); URL.revokeObjectURL(url);
+    toast('Summary saved.');
+  }
+
+  function wireQuillCreator() {
+    const concern=document.getElementById('djt-quill-concern');
+    if(concern) concern.addEventListener('input', ()=>{ const cc=document.getElementById('djt-quill-ccc'); if(cc) cc.textContent=(concern.value||'').length+'/500'; });
+    const btn=document.getElementById('djt-quill-review'); if(btn) btn.addEventListener('click', runQuillReview);
+    quillBindCopy('djt-quill-review-copy','djt-quill-review-text');
+    const cancel=document.getElementById('djt-quill-review-cancel'); if(cancel) cancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-review-out'); if(o) o.style.display='none'; });
+  }
+
+  async function runQuillReview() {
+    if(!quillEnabled()){ setQuillCreatorStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const concernEl=document.getElementById('djt-quill-concern');
+    const concern=concernEl?(concernEl.value||'').trim():'';
+    if(!concern){ setQuillCreatorStatus('Describe what your character is doing first.','bad'); return; }
+    if(!isBotPage()){ setQuillCreatorStatus('Open a bot create or edit page so Quill can read the files.','bad'); return; }
+    const btn=document.getElementById('djt-quill-review');
+    if(btn){ btn.disabled=true; btn.textContent='Reading the form…'; }
+    setQuillCreatorStatus('Reading your character files…','busy');
+    const det=await botGuard();
+    if(!det){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('Could not read the bot form (see the prompt to switch to Legacy).','bad'); return; }
+    const res=await bridgeRequest('export');
+    if(!res||res.error||!res.bot){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('Could not read the character files.','bad'); return; }
+    const guts=quillBotGutsText(res.bot);
+    if(!guts){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('The character files look empty — fill them in first.','bad'); return; }
+    const sys=quillReviewSystem();
+    const user=`The creator describes this concern about their character's behaviour:\n"""${concern}"""\n\nHere are the character's files to analyse:\n\n${guts}`;
+    if(btn){ btn.textContent='Quill is analysing…'; }
+    setQuillCreatorStatus('Analysing with '+(settings.quill.backend)+'…','busy');
+    const out=await quillChat(sys,user,{temperature:0.4,maxTokens:900});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; }
+    if(!out.ok){ setQuillCreatorStatus('Quill error: '+out.error,'bad'); return; }
+    setQuillCreatorStatus('');
+    const o=document.getElementById('djt-quill-review-out'); const t=document.getElementById('djt-quill-review-text');
+    if(t) t.textContent=(out.text||'').trim(); if(o) o.style.display='';
+  }
+
+  // ---- QUILL IMPORT (cards from elsewhere -> DJ template) ----
+  function setQuillImportStatus(msg, kind) {
+    const el=document.getElementById('djt-quill-import-status'); if(!el) return;
+    el.textContent=msg||''; el.className='djt-quill-status'+(kind?' '+kind:'');
+  }
+
+  // Read tEXt / iTXt chunks out of a PNG ArrayBuffer (SillyTavern cards embed
+  // the character JSON, base64, under keyword "chara" or "ccv3").
+  function extractPngTextChunks(buf) {
+    const bytes=new Uint8Array(buf); const dv=new DataView(buf);
+    const sig=[137,80,78,71,13,10,26,10];
+    for(let i=0;i<8;i++){ if(bytes[i]!==sig[i]) return null; }
+    const td=new TextDecoder('latin1'); const out={}; let off=8;
+    while(off+8<=bytes.length){
+      const len=dv.getUint32(off); off+=4;
+      const type=td.decode(bytes.subarray(off,off+4)); off+=4;
+      if(off+len>bytes.length) break;
+      const data=bytes.subarray(off,off+len);
+      if(type==='tEXt'){ const z=data.indexOf(0); if(z>=0) out[td.decode(data.subarray(0,z))]=td.decode(data.subarray(z+1)); }
+      else if(type==='iTXt'){ const z=data.indexOf(0); if(z>=0){ const kw=td.decode(data.subarray(0,z)); const compFlag=data[z+1]; let p=z+3; const z2=data.indexOf(0,p); p=z2+1; const z3=data.indexOf(0,p); p=z3+1; if(compFlag===0) out[kw]=td.decode(data.subarray(p)); } }
+      off+=len+4; // data + CRC
+      if(type==='IEND') break;
+    }
+    return out;
+  }
+  function decodeCharaText(b64) {
+    try { const bin=atob(String(b64).trim()); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); return JSON.parse(new TextDecoder('utf-8').decode(bytes)); }
+    catch(e){ return null; }
+  }
+  const qiCap=(s,n)=>{ s=(s==null?'':String(s)).trim(); return s.length>n ? s.slice(0,n)+' …[truncated]' : s; };
+  function cardName(card){ const d=(card&&card.data&&typeof card.data==='object')?card.data:card; return (d&&d.name)?String(d.name):''; }
+  function looksLikeCard(obj){ const d=(obj&&obj.data&&typeof obj.data==='object')?obj.data:obj; return !!(d && (d.first_mes!=null || d.mes_example!=null || (d.name!=null && d.description!=null))); }
+  function cardToSource(card){
+    const d=(card&&card.data&&typeof card.data==='object')?card.data:card; const g=k=>(d&&d[k]!=null)?String(d[k]):'';
+    const parts=[];
+    if(g('name')) parts.push('[NAME]: '+qiCap(g('name'),120));
+    if(g('description')) parts.push('[DESCRIPTION]:\n'+qiCap(g('description'),4000));
+    if(g('personality')) parts.push('[PERSONALITY]:\n'+qiCap(g('personality'),2000));
+    if(g('scenario')) parts.push('[SCENARIO]:\n'+qiCap(g('scenario'),1500));
+    if(g('first_mes')) parts.push('[FIRST MESSAGE / GREETING]:\n'+qiCap(g('first_mes'),2000));
+    if(g('mes_example')) parts.push('[EXAMPLE MESSAGES]:\n'+qiCap(g('mes_example'),2500));
+    if(g('system_prompt')) parts.push('[SYSTEM PROMPT]:\n'+qiCap(g('system_prompt'),2000));
+    if(g('post_history_instructions')) parts.push('[POST-HISTORY INSTRUCTIONS]:\n'+qiCap(g('post_history_instructions'),1500));
+    if(g('creator_notes')) parts.push('[CREATOR NOTES]:\n'+qiCap(g('creator_notes'),800));
+    if(Array.isArray(d.alternate_greetings)&&d.alternate_greetings.length) parts.push('[ALTERNATE GREETINGS]:\n'+qiCap(d.alternate_greetings.join('\n---\n'),1500));
+    return parts.join('\n\n');
+  }
+  function parseImportFile(file){
+    return new Promise((resolve,reject)=>{
+      const name=(file.name||'').toLowerCase();
+      const isPng=name.endsWith('.png')||name.endsWith('.webp')||file.type==='image/png';
+      const reader=new FileReader();
+      reader.onerror=()=>reject(new Error('Could not read the file.'));
+      if(isPng){
+        reader.onload=()=>{ const chunks=extractPngTextChunks(reader.result); if(!chunks) return reject(new Error('That image is not a readable PNG card.')); const raw=chunks['ccv3']||chunks['chara']; if(!raw) return reject(new Error('No character data embedded in this image (is it a card?).')); const card=decodeCharaText(raw); if(!card) return reject(new Error('The embedded character data could not be decoded.')); resolve({source:cardToSource(card),name:cardName(card)}); };
+        reader.readAsArrayBuffer(file);
+      } else {
+        reader.onload=()=>{ const text=String(reader.result||''); let obj=null; try{ obj=JSON.parse(text); }catch(e){} if(obj&&looksLikeCard(obj)) resolve({source:cardToSource(obj),name:cardName(obj)}); else if(obj) resolve({source:'[RAW JSON]\n'+qiCap(text,6000),name:''}); else resolve({source:qiCap(text,6000),name:''}); };
+        reader.readAsText(file);
+      }
+    });
+  }
+  function quillImportSystem(){
+    return [
+      "You are Quill, helping a creator move a character from another site into DreamJourney's bot format.",
+      "You are given the character's data (often from a SillyTavern card, sometimes freeform text). REHOME the content into DreamJourney's fields. Preserve the original wording, voice and details. Do not invent new traits and do not rewrite the character's style; only reorganise, and lightly merge where two sources describe the same thing.",
+      'Output STRICT JSON ONLY — no markdown fences, no commentary, no text before or after. Use exactly these string keys:',
+      '"name" (the character name), "introduction" (the opening greeting shown to the user, from the first message), "description" (the full character description, persona and personality merged into one sheet), "context" (the scene/scenario the roleplay starts in), "instructions" (behavioural/system instructions for how the character should act), "examples" (example dialogue/messages), "authorNote" (any post-history or extra notes, otherwise empty).',
+      'If a field has no source content, use an empty string. Keep {{char}} and {{user}} placeholders exactly as written. Return only the JSON object.'
+    ].join(' ');
+  }
+  function parseQuillBotJson(text){
+    if(!text) return null; let t=String(text).trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+    const a=t.indexOf('{'), b=t.lastIndexOf('}'); if(a<0||b<0||b<a) return null;
+    let obj=null; try{ obj=JSON.parse(t.slice(a,b+1)); }catch(e){ return null; }
+    if(!obj||typeof obj!=='object') return null;
+    const keys=['name','introduction','description','context','instructions','examples','authorNote']; const bot={}; let any=false;
+    keys.forEach(k=>{ if(obj[k]!=null){ bot[k]=String(obj[k]); if(bot[k].trim()) any=true; } });
+    return any?bot:null;
+  }
+  function quillImportRender(bot){
+    const labels={name:'Name',introduction:'Introduction',description:'Description',context:'Context',instructions:'Instructions',examples:'Examples',authorNote:'Author note'};
+    const p=document.getElementById('djt-qi-preview'); if(!p) return; p.textContent='';
+    Object.keys(labels).forEach(k=>{ if(bot[k]&&bot[k].trim()){ const h=document.createElement('div'); h.style.cssText='font-weight:700;color:var(--djt-accent);margin-top:6px'; h.textContent=labels[k]; const v=document.createElement('div'); v.style.cssText='white-space:pre-wrap;margin-bottom:4px'; v.textContent=bot[k].length>500?bot[k].slice(0,500)+' …':bot[k]; p.appendChild(h); p.appendChild(v); } });
+    const o=document.getElementById('djt-qi-out'); if(o) o.style.display='';
+    const ab=document.getElementById('djt-qi-apply'); if(ab) ab.style.display=isBotPage()?'':'none';
+  }
+  async function runQuillImport(){
+    if(!quillEnabled()){ setQuillImportStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    if(!quillImportFile){ setQuillImportStatus('Choose a file first.','bad'); return; }
+    const btn=document.getElementById('djt-qi-run'); if(btn){ btn.disabled=true; btn.textContent='Reading file…'; }
+    setQuillImportStatus('Reading the file…','busy');
+    let parsed; try{ parsed=await parseImportFile(quillImportFile); }
+    catch(e){ if(btn){btn.disabled=false;btn.innerHTML='&#9997; Reorganise with Quill';} setQuillImportStatus(String(e&&e.message||e),'bad'); return; }
+    if(!parsed.source){ if(btn){btn.disabled=false;btn.innerHTML='&#9997; Reorganise with Quill';} setQuillImportStatus('No readable character content in that file.','bad'); return; }
+    if(btn){ btn.textContent='Quill is reorganising…'; } setQuillImportStatus('Reorganising with '+(settings.quill.backend)+'…','busy');
+    const out=await quillChat(quillImportSystem(), 'Character source to convert:\n\n'+parsed.source, {temperature:0.2,maxTokens:1600,json:true});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#9997; Reorganise with Quill'; }
+    if(!out.ok){ setQuillImportStatus('Quill error: '+out.error,'bad'); return; }
+    const bot=parseQuillBotJson(out.text);
+    if(!bot){ setQuillImportStatus('Quill did not return valid bot JSON — try again, or use a larger model.','bad'); const o=document.getElementById('djt-qi-out'); const p=document.getElementById('djt-qi-preview'); if(p) p.textContent=(out.text||'').slice(0,1500); if(o) o.style.display=''; quillImportBot=null; return; }
+    if(!bot.name && parsed.name) bot.name=parsed.name;
+    quillImportBot=bot; setQuillImportStatus(''); quillImportRender(bot);
+  }
+  function downloadQuillImport(){
+    if(!quillImportBot){ toast('Nothing to download yet.'); return; }
+    const json=botEnvelope(quillImportBot); const blob=new Blob([json],{type:'application/json'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    const nm=(quillImportBot.name||'bot').replace(/[^\w\-]+/g,'_').slice(0,40)||'bot';
+    a.href=url; a.download='djt-import-'+nm+'.json'; a.click(); URL.revokeObjectURL(url);
+    toast('Saved. Use Import bot to load it onto a bot page.');
+  }
+  async function applyQuillImport(){
+    if(!quillImportBot){ return; }
+    if(!isBotPage()){ setQuillImportStatus('Open a bot create/edit page to apply directly.','bad'); return; }
+    const det=await botGuard(); if(!det) return;
+    const res=await bridgeRequest('import', quillImportBot);
+    if(!res||res.error){ setQuillImportStatus('Apply failed: '+((res&&res.error)||'unknown'),'bad'); return; }
+    toast('Applied to the bot form — review every field before saving.');
+    setQuillImportStatus('Applied. Please review the form before saving.','');
+  }
+  function wireQuillImport(){
+    const file=document.getElementById('djt-qi-file'); const choose=document.getElementById('djt-qi-choose');
+    if(choose&&file) choose.addEventListener('click', ()=>file.click());
+    if(file) file.addEventListener('change', ()=>{ quillImportFile=(file.files&&file.files[0])||null; const fn=document.getElementById('djt-qi-filename'); if(fn) fn.textContent=quillImportFile?('Selected: '+quillImportFile.name):'No file chosen.'; });
+    const run=document.getElementById('djt-qi-run'); if(run) run.addEventListener('click', runQuillImport);
+    const dl=document.getElementById('djt-qi-download'); if(dl) dl.addEventListener('click', downloadQuillImport);
+    const ap=document.getElementById('djt-qi-apply'); if(ap) ap.addEventListener('click', applyQuillImport);
+    quillBindCopy('djt-qi-copy','djt-qi-preview');
+    const cancel=document.getElementById('djt-qi-cancel'); if(cancel) cancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-qi-out'); if(o) o.style.display='none'; });
+  }
+
+  // Generic yes/no confirm using the toolkit's themed modal.
+  function djtConfirm(title, body) {
+    return new Promise(resolve => {
+      const ov=document.createElement('div'); ov.className='djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme||'dark'); ov.setAttribute('data-djt-skin', settings.skin||'dreamjourney');
+      const safe=(body||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      ov.innerHTML=`<div class="djt-modal"><h2>${title}</h2><p class="djt-modal-hint">${safe}</p><div class="djt-modal-btns"><button class="djt-btn ghost" data-v="cancel">Cancel</button><button class="djt-btn primary" data-v="yes">Continue</button></div></div>`;
+      document.body.appendChild(ov);
+      ov.addEventListener('click', e=>{ const b=e.target.closest('[data-v]'); if(!b) return; ov.remove(); resolve(b.dataset.v==='yes'); });
+    });
+  }
+
   function buildPanel() {
     if(document.getElementById('djt-panel')) return;
     const p = document.createElement('div'); p.id = 'djt-panel';
@@ -1253,7 +1673,7 @@
       // HEAD
       `<div id="djt-head">` +
         `<img id="djt-sun-icon" src="${sunIconUrl}" alt="☀️" draggable="false" onerror="this.outerHTML='<span id=\\'djt-sun-icon\\' style=\\'font-size:20px;flex-shrink:0\\'>☀️</span>'">` +
-        `<span class="djt-title">Sunny’s Toolkit</span>` +
+        `<span class="djt-title">Aster</span>` +
         `<div class="djt-head-btns">` +
           `<button id="djt-theme-btn" class="djt-icon-btn" title="Toggle light/dark">☀️</button>` +
           `<button id="djt-collapse" title="Collapse">–</button>` +
@@ -1336,6 +1756,59 @@
             `<button id="djt-scroll-bottom-btn" class="djt-mini-btn full djt-dl-btn">↓ Back to bottom</button>` +
           `</div>` +
 
+          // Quill (chat) card
+          `<div class="djt-card" id="djt-quill-chat-card">` +
+            cardH('&#9997; Quill', 'quillchat') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-chat-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-chat-main" style="display:none">` +
+                // Persona (per-session: who Quill writes as)
+                `<div class="djt-quill-lab">Your persona <span class="djt-quill-cc" id="djt-quill-pcc">0/500</span></div>` +
+                `<div class="djt-quill-cap">Who Quill writes as in this chat. Saved to this session.</div>` +
+                `<textarea id="djt-quill-persona" class="djt-quill-ta" maxlength="500" placeholder="e.g. Mara, 28, a sharp-tongued field medic who hides nerves behind dry humour."></textarea>` +
+                `<div class="djt-quill-divider"></div>` +
+                // Improve my message
+                `<div class="djt-quill-sub">Improve my message</div>` +
+                `<div class="djt-quill-cap">Polishes the text in your message box, using the bot's last message as context.</div>` +
+                `<div class="djt-quill-lab">Strength</div>` +
+                `<div class="djt-seg" id="djt-quill-strength">` +
+                  [1,2,3,4,5].map(n=>`<button data-v="${n}"${n===2?' class="on"':''}>${n}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-hint" id="djt-quill-strength-hint">Light polish</div>` +
+                `<div class="djt-quill-lab">Tone</div>` +
+                `<div class="djt-seg djt-seg-wrap" id="djt-quill-tone">` +
+                  [['none','Neutral'],['casual','Casual'],['sarcastic','Sarcastic'],['dark','Dark'],['descriptive','Descriptive']].map(t=>`<button data-v="${t[0]}"${t[0]==='none'?' class="on"':''}>${t[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Length</div>` +
+                `<div class="djt-seg" id="djt-quill-length">` +
+                  [['short','Short'],['medium','Medium'],['long','Long']].map(l=>`<button data-v="${l[0]}"${l[0]==='medium'?' class="on"':''}>${l[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Tell Quill what you want <span class="djt-quill-cc" id="djt-quill-cc">0/500</span></div>` +
+                `<select id="djt-quill-preset" class="djt-quill-select"><option value="">Load a preset…</option></select>` +
+                `<textarea id="djt-quill-custom" class="djt-quill-ta" maxlength="500" placeholder="e.g. keep my voice; add tension; mirror the bot's tone"></textarea>` +
+                `<button id="djt-quill-improve" class="djt-mini-btn full primary">&#9997; Improve my message</button>` +
+                `<div id="djt-quill-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-out-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-use" class="djt-mini-btn">Use this</button><button id="djt-quill-copy" class="djt-mini-btn ghost">Copy</button><button id="djt-quill-redo" class="djt-mini-btn ghost">Redo</button><button id="djt-quill-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                // Summarize
+                `<div class="djt-quill-divider"></div>` +
+                `<div class="djt-quill-sub">Summarize chat &rarr; bullet points</div>` +
+                `<div class="djt-quill-lab">How many recent messages</div>` +
+                `<div class="djt-seg" id="djt-quill-sumcount">` +
+                  [5,10,15,20].map(n=>`<button data-v="${n}"${n===10?' class="on"':''}>${n}</button>`).join('') +
+                `</div>` +
+                `<label class="djt-quill-check"><input type="checkbox" id="djt-quill-fromstart"> From the start</label>` +
+                `<button id="djt-quill-summarize" class="djt-mini-btn full">&#128221; Summarize</button>` +
+                `<div id="djt-quill-sum-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-sum-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-sum-dl" class="djt-mini-btn">&#11015; Save .txt</button><button id="djt-quill-sum-copy" class="djt-mini-btn ghost">Copy</button><button id="djt-quill-sum-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-status" class="djt-quill-status"></div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
           `<button id="djt-help-btn" class="djt-help-tab">? How to use this toolkit</button>` +
 
         `</div>` + // end djt-tab-chat
@@ -1344,7 +1817,7 @@
         `<div id="djt-tab-creator" class="djt-tab-pane" style="display:none">` +
 
           // Bot Tools card
-          `<div class="djt-card">` +
+          `<div class="djt-card" id="djt-bottools-card">` +
             cardH('Bot Tools', 'bottools') +
             `<div class="djt-card-body">` +
               `<button id="djt-bot-export-btn" class="djt-mini-btn full primary" style="margin-bottom:6px">📤 Export bot</button>` +
@@ -1354,7 +1827,7 @@
           `</div>` +
 
           // Lorebook Tools card
-          `<div class="djt-card">` +
+          `<div class="djt-card" id="djt-lorebook-card">` +
             cardH('Lorebook Tools', 'lorebook') +
             `<div class="djt-card-body">` +
               `<button id="djt-lb-load-btn" class="djt-mini-btn full primary" style="margin-bottom:6px">📥 Load Lorebook</button>` +
@@ -1379,11 +1852,50 @@
           `</div>` +
 
           // Tool Pages card
-          `<div class="djt-card">` +
+          `<div class="djt-card" id="djt-toolpages-card">` +
             cardH('Tool Pages', 'toolpages') +
             `<div class="djt-card-body">` +
-              `<a class="djt-tool-link" href="${studioUrl}" target="_blank">Lorebook Studio ↗</a>` +
+              `<a class="djt-tool-link" href="${studioUrl}" target="_blank">Lorebook Workshop ↗</a>` +
               `<div class="djt-tool-note">Merge, wrap &amp; unwrap lorebooks, all in one page.</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Quill (creator) card — Character Lens
+          `<div class="djt-card" id="djt-quill-creator-card">` +
+            cardH('&#9997; Quill &middot; Character Lens', 'quillcreator') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-creator-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-creator-main" style="display:none">` +
+                `<div class="djt-quill-cap">An analytical second read of your character's files. On a bot create/edit page, describe what your character is doing wrong and Quill looks for wording a model might misread. It will not rewrite your bot for you.</div>` +
+                `<div class="djt-quill-lab">What's happening with your character? <span class="djt-quill-cc" id="djt-quill-ccc">0/500</span></div>` +
+                `<textarea id="djt-quill-concern" class="djt-quill-ta" maxlength="500" placeholder="e.g. My detective keeps obsessing over numbers and measuring things, when he's meant to be habit-driven, not maths-driven."></textarea>` +
+                `<button id="djt-quill-review" class="djt-mini-btn full primary">&#128269; Analyse my character</button>` +
+                `<div id="djt-quill-review-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-review-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-review-copy" class="djt-mini-btn ghost">Copy</button><button id="djt-quill-review-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-creator-status" class="djt-quill-status"></div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Quill (creator) card — Import a character
+          `<div class="djt-card" id="djt-quill-import-card">` +
+            cardH('&#9997; Quill &middot; Import a character', 'quillimport') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-import-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-import-main" style="display:none">` +
+                `<div class="djt-quill-cap">Upload a character card (SillyTavern .png / .json) or a plain .txt bot from anywhere. Quill reorganises it into DreamJourney's template so you can import or apply it. It rehomes the content, it does not rewrite your character.</div>` +
+                `<input type="file" id="djt-qi-file" accept=".json,.png,.txt,.webp,application/json,image/png,text/plain" style="display:none">` +
+                `<button id="djt-qi-choose" class="djt-mini-btn full">&#128194; Choose a card or text file</button>` +
+                `<div id="djt-qi-filename" class="djt-quill-cap" style="margin-top:6px">No file chosen.</div>` +
+                `<button id="djt-qi-run" class="djt-mini-btn full primary" style="margin-top:6px">&#9997; Reorganise with Quill</button>` +
+                `<div id="djt-qi-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-qi-preview" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-qi-download" class="djt-mini-btn">&#11015; Download .json</button><button id="djt-qi-apply" class="djt-mini-btn">Apply to bot page</button><button id="djt-qi-copy" class="djt-mini-btn ghost">Copy</button><button id="djt-qi-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-import-status" class="djt-quill-status"></div>` +
+              `</div>` +
             `</div>` +
           `</div>` +
 
@@ -1395,13 +1907,7 @@
         `<div id="djt-advanced-wrap">` +
           `<button id="djt-advanced-toggle" class="djt-advanced-toggle">▸ Advanced</button>` +
           `<div id="djt-advanced-body" style="display:none">` +
-            `<div class="djt-theme-block">` +
-              `<div class="djt-theme-label">🎨 Theme</div>` +
-              `<div class="djt-theme-opts">` +
-                `<button class="djt-theme-opt" data-skin="dreamjourney">DreamJourney</button>` +
-                `<button class="djt-theme-opt" data-skin="sunflowers">Sunflowers</button>` +
-              `</div>` +
-            `</div>` +
+            `<div class="djt-tool-note" style="text-align:center;margin-bottom:8px">Theme options have moved to the Settings window (click the toolkit button in your browser bar).</div>` +
             `<button id="djt-surprise-btn" class="djt-mini-btn full djt-surprise">&#127800; Surprise me!</button>` +
           `</div>` +
         `</div>` +
@@ -1502,6 +2008,12 @@
       });
     });
 
+    // Quill wiring (chat + creator + import)
+    wireQuillChat();
+    wireQuillCreator();
+    wireQuillImport();
+    refreshQuillUI();
+
     // Draggable + resizable + restore saved position/size
     initDrag(p);
     initResize(p);
@@ -1549,7 +2061,7 @@
     if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
   }
   function applyAllCardCollapses() {
-    ['stats','regen','scratch','features','bottools','lorebook','toolpages'].forEach(applyCardCollapse);
+    ['stats','regen','scratch','features','quillchat','bottools','lorebook','toolpages','quillcreator','quillimport'].forEach(applyCardCollapse);
   }
 
   function syncToggleStates() {
@@ -1557,11 +2069,45 @@
       const cb=document.getElementById('djt-t-'+key); if(cb) cb.checked=settings[key]!==false;
     });
   }
+  // Sections the user can hide from the pop-out via the Settings window.
+  // key = settings.hidden[key]; also exported (by label) to the popup.
+  const HIDEABLE = [
+    { key:'stats',        el:'djt-stats-card',         tab:'chat',    label:'Session stats' },
+    { key:'scratch',      el:'djt-scratch-card',       tab:'chat',    label:'User Input Recovery' },
+    { key:'features',     el:'djt-features-card',      tab:'chat',    label:'Feature toggles' },
+    { key:'download',     el:'djt-dl-btns',            tab:'chat',    label:'Download & scroll buttons' },
+    { key:'quillchat',    el:'djt-quill-chat-card',    tab:'chat',    label:'Quill (Chat)' },
+    { key:'bottools',     el:'djt-bottools-card',      tab:'creator', label:'Bot Tools' },
+    { key:'lorebook',     el:'djt-lorebook-card',      tab:'creator', label:'Lorebook Tools' },
+    { key:'toolpages',    el:'djt-toolpages-card',     tab:'creator', label:'Tool Pages' },
+    { key:'quillcreator', el:'djt-quill-creator-card', tab:'creator', label:'Quill (Character Lens)' },
+    { key:'quillimport',  el:'djt-quill-import-card',  tab:'creator', label:'Quill (Import a character)' }
+  ];
+  const isHidden = key => !!(settings.hidden && settings.hidden[key]);
+
+  // Final visibility = feature-enabled AND not user-hidden. Also hides tabs.
   function applyVisibility() {
-    const statsCard=document.getElementById('djt-stats-card'); if(statsCard)statsCard.style.display=settings.stats?'':'none';
-    const nexusSec=document.getElementById('djt-nexus-section'); if(nexusSec)nexusSec.style.display=(settings.stats&&settings.nexus)?'':'none';
-    const scratchCard=document.getElementById('djt-scratch-card'); if(scratchCard)scratchCard.style.display=settings.scratchpad?'':'none';
+    const show=(id,ok)=>{ const el=document.getElementById(id); if(el) el.style.display = ok ? '' : 'none'; };
+    // feature-gated + hidden-gated
+    show('djt-stats-card', settings.stats && !isHidden('stats'));
+    const nexusSec=document.getElementById('djt-nexus-section'); if(nexusSec) nexusSec.style.display=(settings.stats&&settings.nexus&&!isHidden('stats'))?'':'none';
+    show('djt-scratch-card', settings.scratchpad && !isHidden('scratch'));
     if(!settings.saveRegens){const regen=document.getElementById('djt-regen');if(regen)regen.style.display='none';}
+    // hidden-gated only
+    show('djt-features-card', !isHidden('features'));
+    show('djt-dl-btns', !isHidden('download'));
+    show('djt-quill-chat-card', !isHidden('quillchat'));
+    show('djt-bottools-card', !isHidden('bottools'));
+    show('djt-lorebook-card', !isHidden('lorebook'));
+    show('djt-toolpages-card', !isHidden('toolpages'));
+    show('djt-quill-creator-card', !isHidden('quillcreator'));
+    show('djt-quill-import-card', !isHidden('quillimport'));
+    // tabs (don't let both be hidden; if the active one is hidden, move over)
+    const chatHidden=isHidden('tab:chat'), creatorHidden=isHidden('tab:creator');
+    const cb=document.querySelector('#djt-tabs .djt-tab[data-tab="chat"]'); if(cb) cb.style.display=chatHidden?'none':'';
+    const rb=document.querySelector('#djt-tabs .djt-tab[data-tab="creator"]'); if(rb) rb.style.display=creatorHidden?'none':'';
+    if(settings.activeTab==='chat' && chatHidden && !creatorHidden) switchTab('creator', true);
+    else if(settings.activeTab==='creator' && creatorHidden && !chatHidden) switchTab('chat', true);
   }
 
   // ---- BOT EXPORT / IMPORT (bot create & edit pages) ---------
@@ -1641,7 +2187,7 @@
   function botEnvelope(bot) {
     return JSON.stringify({
       _type: 'dreamjourney-bot',
-      _toolkit: "Sunny's DJ Toolkit V2.1",
+      _toolkit: "Aster",
       _exportedAt: new Date().toISOString(),
       bot
     }, null, 2);
@@ -1847,6 +2393,21 @@
     const cm = document.querySelector('.djt-modal-overlay');
     if (cm) { const cancel = cm.querySelector('[data-v="cancel"]'); if (cancel) cancel.click(); else cm.remove(); }
   });
+
+  // Live-apply settings changed from the Settings Window popup (themes now;
+  // visibility/quill consumed in later stages). Only pull the fields the popup
+  // owns so we never clobber in-memory panelPos/size/collapse state.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes[SETTINGS_KEY]) return;
+      const nv = changes[SETTINGS_KEY].newValue; if (!nv) return;
+      if (typeof nv.skin === 'string') settings.skin = nv.skin;
+      if (typeof nv.theme === 'string') settings.theme = nv.theme;
+      if (nv.hidden && typeof nv.hidden === 'object') settings.hidden = nv.hidden;
+      if (nv.quill && typeof nv.quill === 'object') settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, nv.quill);
+      if (document.getElementById('djt-panel')) { setSkin(settings.skin); setTheme(settings.theme); refreshQuillUI(); applyVisibility(); }
+    });
+  } catch (e) {}
 
   setupDelegation(); setupRouteWatcher(); onRouteChange();
 })();

@@ -6,6 +6,7 @@
 <title>Creator Tools: How They Work</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { overflow-wrap: break-word; }
   :root {
     --bg:#0d0c14; --surface:rgba(255,255,255,0.03); --border:rgba(255,255,255,0.08);
     --border-hover:rgba(167,139,250,0.2); --text:#e4e4e7; --soft:#a1a1aa; --muted:#52525b;
@@ -29,7 +30,16 @@
   body { background:var(--bg); color:var(--text); font-family:ui-sans-serif, system-ui, sans-serif; font-size:14px; line-height:1.65; min-height:100vh; }
   body::before { content:''; position:fixed; inset:0; z-index:-1; background-image:url('icons/bg-dark.jpg'); background-size:cover; background-position:center top; opacity:0.5; pointer-events:none; }
   [data-theme="light"] body::before { background-image:url('icons/bg-light.jpg'); }
-  [data-skin="sunflowers"] body::before { display:none; }
+  [data-skin="sunflowers"] body::before { display: block; opacity: 1;
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(157,196,122,0.16), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(224,170,60,0.12), transparent 55%),
+      linear-gradient(160deg, #1b1308 0%, #130E08 70%); }
+  [data-skin="sunflowers"][data-theme="light"] body::before {
+    background-image:
+      radial-gradient(circle at 22% 12%, rgba(78,110,60,0.12), transparent 55%),
+      radial-gradient(circle at 85% 90%, rgba(212,160,23,0.12), transparent 55%),
+      linear-gradient(160deg, #F3ECDC 0%, #EFE8D8 70%); }
 
   .hero { background:rgba(13,12,20,0.76); border-bottom:1px solid rgba(167,139,250,0.18); padding:36px 28px 28px; text-align:center; position:relative; backdrop-filter:blur(2px); }
   [data-theme="light"] .hero { background:rgba(245,240,255,0.84); border-bottom-color:rgba(99,102,241,0.18); }
@@ -47,7 +57,8 @@
 
   main { max-width:660px; margin:0 auto; padding:28px 20px 0; }
   .intro { font-size:14px; color:var(--soft); margin-bottom:8px; line-height:1.7; }
-  .section-label { font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--muted); margin:24px 0 10px; padding-left:2px; }
+  .section-label { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.12em; color:var(--accent); margin:24px 0 10px; padding-left:2px; text-shadow:0 1px 5px rgba(0,0,0,0.6); }
+  [data-theme="light"] .section-label { text-shadow:none; }
 
   .card { background:rgba(13,12,20,0.82); border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:18px 20px; margin-bottom:9px; backdrop-filter:blur(4px); }
   [data-theme="light"] .card { background:rgba(246,242,255,0.86); border-color:rgba(99,102,241,0.16); }
@@ -131,7 +142,8 @@
 <nav class="page-nav">
   <a href="help.html">Chat Tools help</a>
   <span class="page-nav-here">Creator Tools help</span>
-  <a href="lorebook-studio.html">Lorebook Studio</a>
+  <a href="lorebook-studio.html">Lorebook Workshop</a>
+  <a href="quill-guide.html">Quill guide</a>
 </nav>
 
 <main>
@@ -212,14 +224,14 @@
         <li>It refreshes on its own whenever a new message is sent.</li>
         <li>Need the complete breakdown? Click <strong>Full details</strong> to pop out the same rich view the Message Tester gives.</li>
       </ol>
-      <div class="tip"><span class="tip-icon">💡</span><span>If the token bar turns red, you're over budget and some entries are being cut. Time to wrap a few triggers in Lorebook Studio.</span></div>
+      <div class="tip"><span class="tip-icon">💡</span><span>If the token bar turns red, you're over budget and some entries are being cut. Time to wrap a few triggers in Lorebook Workshop.</span></div>
     </div>
   </div>
 
   <div class="section-label">Tool page</div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">🛠️</div><div class="card-title">Lorebook Studio</div></div>
+    <div class="card-head"><div class="card-icon">🛠️</div><div class="card-title">Lorebook Workshop</div></div>
     <div class="card-body">
       <p>A separate page with tools that actually <strong>change or check a lorebook file</strong> for you. Each tab has its own step-by-step guide built in. In short:</p>
       <ol class="steps">
@@ -238,6 +250,7 @@
 <div class="footer-wrap">
   <div class="footer-thanks">That's everything! Take it slow 💛</div>
   <div class="footer-name">Sunny</div>
+  <div style="margin-top:12px"><a class="profile-link" href="https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/index.html" target="_blank" rel="noopener">🌻 Visit Sunflower Fields</a></div>
   <div class="footer-data">All tools run locally on your device. Nothing is uploaded anywhere.</div>
 </div>
 

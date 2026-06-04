@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Aster: How It Works</title>
+<title>Quill — Guide &amp; Setup</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { overflow-wrap: break-word; }
@@ -18,13 +18,11 @@
     --border-hover: rgba(99,102,241,0.35); --text: #1e1b4b; --soft: #374151; --muted: #9ca3af;
     --accent: #6366f1; --card-shadow: 0 2px 12px rgba(99,102,241,0.08);
   }
-  /* Sunflowers skin — dark */
   [data-skin="sunflowers"] {
     --bg: #130E08; --surface: rgba(157,196,122,0.06); --border: rgba(157,196,122,0.15);
     --border-hover: rgba(157,196,122,0.35); --text: #F0E8D8; --soft: #C8B89A; --muted: #C4A882;
     --accent: #9DC47A; --card-shadow: none;
   }
-  /* Sunflowers skin — light */
   [data-skin="sunflowers"][data-theme="light"] {
     --bg: #EFE8D8; --surface: rgba(143,175,122,0.10); --border: rgba(143,175,122,0.28);
     --border-hover: rgba(78,110,60,0.40); --text: #332820; --soft: #5C4433; --muted: #7A5C3E;
@@ -55,22 +53,19 @@
   [data-theme="light"] body::before { background-image: url('icons/bg-light.jpg'); }
   .hero, main, .footer-wrap { position: relative; z-index: 1; }
 
-  /* hero */
   .hero {
     background: rgba(13,12,20,0.76); border-bottom: 1px solid rgba(167,139,250,0.18);
     padding: 36px 28px 28px; text-align: center; position: relative; backdrop-filter: blur(2px);
   }
   [data-theme="light"] .hero { background: rgba(245,240,255,0.84); border-bottom-color: rgba(99,102,241,0.18); }
-  .hero-icon { width: 52px; height: 52px; margin: 0 auto 10px; display: block; filter: drop-shadow(0 0 12px rgba(251,191,36,0.35)); }
+  .hero-icon { width: 60px; height: 60px; margin: 0 auto 10px; display: block; filter: drop-shadow(0 0 14px rgba(251,191,36,0.45)); }
   h1 { font-size: 22px; font-weight: 800; color: var(--accent); letter-spacing: -0.01em; margin-bottom: 4px; }
   .hero-sub { font-size: 13px; color: var(--muted); }
   .hero-sub span { color: var(--soft); }
 
-  /* theme toggle */
   .theme-btn { position: absolute; top: 16px; right: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 14px; cursor: pointer; color: var(--text); transition: background 0.15s; }
   .theme-btn:hover { background: var(--border); }
 
-  /* cross-page nav */
   .page-nav { max-width:660px; margin:18px auto 0; padding:0 20px; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; position:relative; z-index:1; }
   .page-nav a, .page-nav-here { font-size:12px; font-weight:700; padding:7px 14px; border-radius:20px; text-decoration:none; border:1px solid var(--border); }
   .page-nav a { background:var(--surface); color:var(--accent); transition:background .15s, border-color .15s; }
@@ -80,69 +75,62 @@
 
   main { max-width: 660px; margin: 0 auto; padding: 28px 20px 0; }
   .section-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); margin: 24px 0 10px; padding-left: 2px; text-shadow: 0 1px 5px rgba(0,0,0,0.6); }
-  [data-theme="light"] .section-label { text-shadow: none; }
+  .lead { font-size: 13.5px; color: var(--text); margin: 0 2px 14px; line-height: 1.7; text-shadow: 0 1px 5px rgba(0,0,0,0.55); }
+  .lead strong { color: var(--text); font-weight: 800; }
+  [data-theme="light"] .section-label, [data-theme="light"] .lead { text-shadow: none; }
+  [data-theme="light"] .lead { color: var(--soft); }
 
-  /* cards */
   .card {
     background: rgba(13,12,20,0.82);
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 14px; padding: 18px 20px; margin-bottom: 9px;
     transition: border-color 0.2s; backdrop-filter: blur(4px);
   }
-  [data-theme="light"] .card {
-    background: rgba(246,242,255,0.86);
-    border-color: rgba(99,102,241,0.16);
-  }
+  [data-theme="light"] .card { background: rgba(246,242,255,0.86); border-color: rgba(99,102,241,0.16); }
   .card:hover { border-color: var(--border-hover); }
   .card-head { display: flex; align-items: center; gap: 11px; margin-bottom: 9px; }
   .card-icon { width: 34px; height: 34px; border-radius: 9px; background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.18); display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
   [data-theme="light"] .card-icon { background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.18); }
   .card-title { font-size: 14px; font-weight: 700; color: var(--text); }
   .card-tag { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; margin-left: auto; background: rgba(34,197,94,0.1); color: #22c55e; border: 1px solid rgba(34,197,94,0.2); flex-shrink: 0; }
+  .card-tag.paid { background: rgba(249,115,22,0.1); color: #f97316; border-color: rgba(249,115,22,0.2); }
+  .card-tag.tool { background: rgba(167,139,250,0.12); color: var(--accent); border-color: rgba(167,139,250,0.25); }
   .card-body { font-size: 13px; color: var(--soft); line-height: 1.68; }
   .card-body p { margin-bottom: 7px; }
   .card-body p:last-child { margin-bottom: 0; }
   .card-body strong { color: var(--text); font-weight: 700; }
+  .card-body ul { margin: 4px 0 4px 20px; }
+  .card-body li { margin-bottom: 6px; }
+  .card-body a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .card-body a:hover { text-decoration: underline; }
+  code { background: rgba(255,255,255,0.07); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  [data-theme="light"] code { background: rgba(99,102,241,0.1); }
 
-  /* nexus pills */
-  .nexus-pills { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
-  .pill { font-size: 11px; font-weight: 700; padding: 3px 11px; border-radius: 20px; }
-  .pill.green  { background: rgba(34,197,94,0.1);  color: #22c55e; border: 1px solid rgba(34,197,94,0.2); }
-  .pill.orange { background: rgba(249,115,22,0.1); color: #f97316; border: 1px solid rgba(249,115,22,0.2); }
-  .pill.red    { background: rgba(239,68,68,0.1);  color: #ef4444; border: 1px solid rgba(239,68,68,0.2); }
-
-  /* tip */
   .tip { background: rgba(99,102,241,0.07); border: 1px solid rgba(99,102,241,0.16); border-radius: 9px; padding: 9px 13px; margin-top: 9px; font-size: 12px; color: var(--soft); display: flex; gap: 8px; line-height: 1.5; }
   .tip-warn { background: rgba(249,115,22,0.07); border-color: rgba(249,115,22,0.2); }
   [data-theme="light"] .tip-warn { background: rgba(249,115,22,0.06); }
   .tip-icon { flex-shrink: 0; }
+  .safety { border-color: rgba(239,68,68,0.28); }
+  .safety .card-icon { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.22); }
 
-  /* footer */
   .footer-wrap {
     max-width: 660px; margin: 36px auto 0;
     border-top: 1px solid rgba(255,255,255,0.08);
     padding: 36px 20px 44px; text-align: center;
-    background: rgba(13,12,20,0.76);
-    backdrop-filter: blur(4px);
+    background: rgba(13,12,20,0.76); backdrop-filter: blur(4px);
   }
-  [data-theme="light"] .footer-wrap {
-    border-top-color: rgba(99,102,241,0.12);
-    background: rgba(246,242,255,0.82);
-  }
+  [data-theme="light"] .footer-wrap { border-top-color: rgba(99,102,241,0.12); background: rgba(246,242,255,0.82); }
   .footer-chibi { width: 96px; height: 96px; border-radius: 50%; display: block; margin: 0 auto 14px; filter: drop-shadow(0 4px 14px rgba(167,139,250,0.22)); }
   .footer-thanks { font-size: 17px; font-weight: 800; color: var(--accent); margin-bottom: 4px; }
   .footer-name { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
   .profile-link { display: inline-block; background: rgba(167,139,250,0.12); border: 1px solid rgba(167,139,250,0.32); border-radius: 10px; padding: 10px 22px; color: var(--accent); font-size: 14px; font-weight: 700; text-decoration: none; transition: background 0.15s, border-color 0.15s; }
   [data-theme="light"] .profile-link { background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.3); }
   .profile-link:hover { background: rgba(167,139,250,0.22); border-color: rgba(167,139,250,0.5); }
-  [data-theme="light"] .profile-link:hover { background: rgba(99,102,241,0.18); }
   .footer-data { font-size: 11px; color: var(--muted); margin-top: 18px; opacity: 0.7; }
 
-  /* Sunflowers skin — elegant serif headings (falls back gracefully without the web font) */
+  /* Sunflowers skin retints */
   [data-skin="sunflowers"] h1 { font-family: 'Cormorant Garamond', Georgia, 'Times New Roman', serif; font-weight: 700; letter-spacing: 0.01em; }
   [data-skin="sunflowers"] .card-title { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16px; font-weight: 700; }
-
-  /* Sunflowers skin — retint hardcoded surfaces */
   [data-skin="sunflowers"] .hero { background: rgba(28,20,12,0.82); border-bottom-color: rgba(157,196,122,0.20); }
   [data-skin="sunflowers"][data-theme="light"] .hero { background: rgba(254,249,240,0.86); border-bottom-color: rgba(78,110,60,0.20); }
   [data-skin="sunflowers"] .card { background: rgba(28,20,12,0.82); border-color: rgba(157,196,122,0.16); }
@@ -154,22 +142,12 @@
   [data-skin="sunflowers"] .tip { background: rgba(157,196,122,0.08); border-color: rgba(157,196,122,0.18); }
   [data-skin="sunflowers"] .profile-link { background: rgba(157,196,122,0.12); border-color: rgba(157,196,122,0.34); }
 
-  /* ---------- MOBILE ---------- */
-  @media (max-width: 560px) {
-    body { font-size: 13.5px; }
-    .hero { padding: 26px 16px 20px; }
-    .hero-icon { width: 44px; height: 44px; }
-    h1 { font-size: 19px; }
+  @media (max-width: 520px) {
     .theme-btn { top: 12px; right: 12px; }
     .page-nav { padding: 0 14px; gap: 6px; }
     .page-nav a, .page-nav-here { font-size: 11px; padding: 6px 11px; }
     main { padding: 22px 14px 0; }
-    .card { padding: 15px 16px; }
-    .card-head { gap: 9px; }
-    .card-icon { width: 30px; height: 30px; font-size: 15px; }
-    .nexus-pills { gap: 6px; }
     .footer-wrap { padding: 28px 16px 38px; }
-    .footer-chibi { width: 80px; height: 80px; }
   }
 </style>
 </head>
@@ -177,101 +155,112 @@
 
 <div class="hero">
   <button class="theme-btn" id="theme-toggle" title="Toggle light / dark mode">☀️</button>
-  <img src="icons/sun64.png" class="hero-icon" alt="">
-  <h1>Aster</h1>
-  <div class="hero-sub">Made by <span>SunflowerS at Dreamjourney AI</span></div>
+  <img src="icons/quill.png" class="hero-icon" alt="" onerror="this.onerror=null;this.src='icons/sun64.png'">
+  <h1>✒️ Quill — Guide &amp; Setup</h1>
+  <div class="hero-sub">Please read before connecting <span>Quill</span></div>
 </div>
 
 <nav class="page-nav">
-  <span class="page-nav-here">Chat Tools help</span>
+  <span class="page-nav-here">Quill guide</span>
+  <a href="help.html">Chat Tools help</a>
   <a href="creator-tools-help.html">Creator Tools help</a>
   <a href="lorebook-studio.html">Lorebook Workshop</a>
-  <a href="quill-guide.html">Quill guide</a>
 </nav>
 
 <main>
+  <p class="lead">Quill connects the toolkit to a language model <strong>you</strong> choose, so it can help polish your messages and summarize your chats. This page explains what it is and how to point it at a model.</p>
+
   <div class="card" style="margin-bottom:18px">
-    <div class="card-head"><div class="card-icon">🗂️</div><div class="card-title">Two tabs &amp; collapsible cards</div></div>
+    <div class="card-head"><div class="card-icon">✒️</div><div class="card-title">What Quill is (and isn't)</div><span class="card-tag tool">tool only</span></div>
     <div class="card-body">
-      <p>The panel has two tabs at the top: <strong>Chat Tools</strong> (everything below) and <strong>Creator Tools</strong> (lorebook tools, see that tab's own help button).</p>
-      <p>Every section is a <strong>collapsible card</strong>: click a card's header to fold it away and keep the panel tidy. Your layout is remembered. You can also drag the panel by its top bar, or click the – button to shrink it down to just the sun icon.</p>
-    </div>
-  </div>
-
-  <div class="section-label">Chat Tools features</div>
-
-  <div class="card">
-    <div class="card-head"><div class="card-icon">📊</div><div class="card-title">Session Stats</div><span class="card-tag">on by default</span></div>
-    <div class="card-body">
-      <p>Keeps a live count of your messages, the bot's messages, and the total, plus how many times you have clicked Regenerate. Can be toggled off independently from the Nexus reminder.</p>
+      <p><strong>Quill has no intelligence of its own.</strong> It is only a tool: a pipe that passes your text to a language model you choose and connect, then shows you the reply. The toolkit does not contain, bundle, or run any AI model. Nothing happens until you point Quill at a model you control.</p>
+      <p>That model can be one you run <strong>locally</strong> on your own machine (private, free, offline) or a paid <strong>API</strong> you have an account with. The quality, speed and behaviour of Quill depend entirely on the model you attach — a small local model will be rougher than a large one.</p>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">🔮</div><div class="card-title">Nexus Reminder</div><span class="card-tag">on by default</span></div>
+    <div class="card-head"><div class="card-icon">💬</div><div class="card-title">On the Chat tab</div></div>
     <div class="card-body">
-      <p>Counts messages sent since you last opened the Nexus. Not mandatory at all, but if you like keeping tabs on it and pruning unnecessary nodes when it gets high, it's a handy reference to have.</p>
-      <div class="nexus-pills">
-        <span class="pill green">Under 20: all good</span>
-        <span class="pill orange">20 to 40: worth a check</span>
-        <span class="pill red">Over 40: check Nexus now</span>
-      </div>
-      <div class="tip"><span class="tip-icon">💡</span><span>Checking your Nexus regularly and pruning unnecessary details or duplicated nodes can improve longform roleplay health!</span></div>
+      <ul>
+        <li><strong>Improve my message</strong> — polishes the text in your chat box, from light grammar fixes (1) up to a full creative rewrite of a rough note (5), using the bot's last message as context.</li>
+        <li><strong>Your persona</strong> — a per-chat description of who you're playing, so Quill rewrites in character as you.</li>
+        <li><strong>Summarize chat</strong> — turns recent messages (or the whole chat) into factual bullet points you can save.</li>
+      </ul>
+      <p>Quill never speaks or acts for the bot, never continues the scene for you, and never invents plot you didn't write.</p>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">🔁</div><div class="card-title">Save Regenerations</div><span class="card-tag">on by default</span></div>
+    <div class="card-head"><div class="card-icon">🛠️</div><div class="card-title">On the Creator tab</div></div>
     <div class="card-body">
-      <p>When you click Regenerate, the toolkit saves the previous reply before it disappears. Browse all saved versions in the panel with the arrow buttons.</p>
-      <p>Found one you prefer? Click <strong>Use this reply</strong> and the toolkit updates the message so the AI treats it as the real reply when you send next. <strong>Discard</strong> clears the saved list if you want to start fresh without sending.</p>
-      <div class="tip"><span class="tip-icon">💡</span><span>Saved replies clear automatically when you send your next message.</span></div>
+      <p>On a bot create/edit page, Quill helps you build — but it stays a sounding board, never a ghost-writer.</p>
+      <ul>
+        <li><strong>Character Lens</strong> — describe what your character is doing wrong and Quill gives an analytical second read of your bot's files. It looks for wording a model might misread (and tells you honestly if it doesn't think the wording is the problem). It will <em>not</em> agree just to please you, and it points you toward testing across models/settings before you rewrite anything.</li>
+        <li><strong>Import a character</strong> — upload a SillyTavern card (<code>.png</code> / <code>.json</code>) or a plain <code>.txt</code> bot from anywhere, and Quill reorganises it into DreamJourney's template. You can then download it as a bot <code>.json</code> or apply it straight to the open bot page. It rehomes the content faithfully — it doesn't rewrite the character.</li>
+      </ul>
+      <p><strong>What Quill will never do:</strong> rewrite your bot's "guts" for you or hand you a finished character. Creating a bot is a human craft — Quill will encourage you to make the changes yourself.</p>
+    </div>
+  </div>
+
+  <div class="section-label">Connecting a model</div>
+  <p class="lead">Pick one in the Settings window, fill in its URL/model, then press <strong>Test connection</strong>. Each option has its own setup docs — follow the links rather than guessing.</p>
+
+  <div class="card">
+    <div class="card-head"><div class="card-icon">🦙</div><div class="card-title">Ollama</div><span class="card-tag">local · recommended</span></div>
+    <div class="card-body">
+      <p>Free, private, runs on your machine. Install it, then pull a model (e.g. <code>ollama pull mistral-nemo</code>).</p>
+      <p>Browser extensions must be allowed to reach it: set the <code>OLLAMA_ORIGINS</code> environment variable so Ollama trusts the toolkit, then restart Ollama.</p>
+      <p>→ <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> · <a href="https://github.com/ollama/ollama/blob/main/docs/faq.md" target="_blank" rel="noopener">setup &amp; CORS FAQ</a></p>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">✏️</div><div class="card-title">User Input Recovery</div><span class="card-tag">on by default</span></div>
+    <div class="card-head"><div class="card-icon">🖥️</div><div class="card-title">LM Studio</div><span class="card-tag">local</span></div>
     <div class="card-body">
-      <p>As you type, the toolkit saves what you have written. If the page crashes, times out, or logs you out, your unsent text will not be lost.</p>
-      <p>The toolkit also saves your last <strong>5 sent messages</strong>. This is useful when the Stop button accidentally deletes your most recent message. Browse and restore any of them from the panel.</p>
+      <p>A desktop app with a built-in OpenAI-compatible server. Start its local server, then use that URL.</p>
+      <p>→ <a href="https://lmstudio.ai" target="_blank" rel="noopener">lmstudio.ai</a></p>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">🛑</div><div class="card-title">Auto-Refresh on Stop</div><span class="card-tag">on by default</span></div>
+    <div class="card-head"><div class="card-icon">⚙️</div><div class="card-title">koboldcpp</div><span class="card-tag">local</span></div>
     <div class="card-body">
-      <p>Stopping a generation mid-way can cause double messages, missing messages, or broken formatting. With this on, a 3-second countdown appears after hitting Stop. Cancel if you need to copy something first.</p>
+      <p>Lightweight local server, great for GGUF models. Serves whatever model you launch it with.</p>
+      <p>→ <a href="https://github.com/LostRuins/koboldcpp" target="_blank" rel="noopener">github.com/LostRuins/koboldcpp</a></p>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">🧠</div><div class="card-title">Delete Thinking Button</div></div>
+    <div class="card-head"><div class="card-icon">🌐</div><div class="card-title">OpenAI / other API</div><span class="card-tag paid">paid · cloud</span></div>
     <div class="card-body">
-      <p><strong>Nyx and Athena models only.</strong> These models show their internal reasoning in a collapsible box before the final reply. Once you have read it, a <strong>Remove thinking</strong> button appears at the top of the message to delete it permanently.</p>
+      <p>Any OpenAI-compatible endpoint works — OpenAI itself, OpenRouter, or your own gateway. You supply a base URL, model name and API key.</p>
+      <p>→ <a href="https://platform.openai.com/docs" target="_blank" rel="noopener">OpenAI</a> · <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a></p>
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-head"><div class="card-icon">⬇️</div><div class="card-title">Download &amp; scroll buttons</div></div>
+  <div class="section-label">Staying safe</div>
+  <div class="card safety">
+    <div class="card-head"><div class="card-icon">⚠️</div><div class="card-title">Before you use an API key</div></div>
     <div class="card-body">
-      <p>There are <strong>three buttons</strong> at the bottom of Chat Tools:</p>
-      <p><strong>↑ Scroll to first message</strong>: slowly scrolls up to load every older message in the chat. When it finishes it asks you to confirm it really reached the first message (if not, just scroll again).</p>
-      <p><strong>⬇ Download chat (.txt)</strong>: saves the whole conversation as a plain text file, with the character's name on each bot message. If you haven't scrolled up yet, it offers to do that first so nothing is missed.</p>
-      <p><strong>↓ Back to bottom</strong>: jumps you straight back down to the latest message.</p>
-      <div class="tip"><span class="tip-icon">💡</span><span>Scroll to first message is also a handy way to jump to the very start of a long chat. Just scroll up, then close the confirmation.</span></div>
-      <div class="tip tip-warn"><span class="tip-icon">🔄</span><span>Didn't reach the first message? Refresh the page and try again. If it still won't reach the start after a couple of tries, please let Sunny know!</span></div>
+      <ul>
+        <li><strong>API keys are secrets.</strong> Treat them like passwords. They're stored only in your own browser's local storage on this device — never shared with the toolkit's author or any third party. Don't paste them anywhere public or share screenshots of them.</li>
+        <li><strong>Costs are yours.</strong> Paid APIs charge per use. Summarizing a long chat or running many rewrites uses tokens you pay for. Local models are free.</li>
+        <li><strong>Your messages go where you point Quill.</strong> Whatever endpoint you configure receives the text you send it. Only use providers you trust. Local models keep everything on your own machine.</li>
+        <li><strong>Rotate a leaked key.</strong> If you suspect a key is exposed, revoke it in your provider's dashboard and issue a new one.</li>
+        <li><strong>You stay in control.</strong> Quill only acts when you press a button, and always shows you the result before anything is applied — nothing is sent on your behalf automatically.</li>
+      </ul>
+      <div class="tip tip-warn"><span class="tip-icon">✅</span><span>Once you've read this, tick <strong>“I understand”</strong> in the Settings window to unlock the connection setup.</span></div>
     </div>
   </div>
-
 </main>
 
 <div class="footer-wrap">
   <img src="icons/chibi140.png" class="footer-chibi" alt="SunflowerS">
-  <div class="footer-thanks">Thank you! Any feedback appreciated!</div>
-  <div class="footer-name">Sunny</div>
+  <div class="footer-thanks">Quill is a tool only — it contains no AI model of its own.</div>
+  <div class="footer-name">Made by SunflowerS at Dreamjourney AI</div>
   <a class="profile-link" href="https://www.dreamjourneyai.com/profile/SunflowerS" target="_blank" rel="noopener">Check out my bots! ✨</a>
   <div style="margin-top:12px"><a class="profile-link" href="https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/index.html" target="_blank" rel="noopener">🌻 Visit Sunflower Fields</a></div>
-  <div class="footer-data">All data stored locally on your device. Nothing is uploaded anywhere.</div>
+  <div class="footer-data">All data stored locally on your device. Nothing is uploaded except to the model endpoint you choose.</div>
 </div>
 
 <script src="help.js"></script>

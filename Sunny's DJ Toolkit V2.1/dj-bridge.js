@@ -1,4 +1,4 @@
-// Sunny's Dreamjourney Toolkit V2 - Bot bridge (MAIN world)
+// Aster - Bot bridge (MAIN world)
 // Runs in the PAGE's JS context so it can reach React / react-hook-form state.
 // The content script (isolated world) talks to it over window.postMessage.
 //
