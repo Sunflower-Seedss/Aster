@@ -1327,6 +1327,38 @@
     ].join(' ');
   }
 
+  function quillReviewSystem() {
+    return [
+      'You are Quill, an analytical writing assistant embedded in a character-creation tool. A creator is worried their character behaves wrongly. Your job is to examine the character files like an editor, NOT to take the creator\'s word for it.',
+      'CRITICAL — do not show bias toward the creator. Do NOT simply agree that the problem exists or flatter them. Read the actual text and judge it on its own terms. If the wording does not support their complaint, say so plainly.',
+      'Look for wording that a language model might MISINTERPRET or over-weight, even if a human reads it fine. Watch for loaded or ambiguous words, repetition that over-emphasises a trait, instructions that pull harder than intended, or traits stated in one section but contradicted in another. (For example, words like "routine" and "schedule" can nudge a model toward number/measurement obsession when the creator only meant the character is habit-driven.) Explain WHY each flagged phrase could be read the way it is.',
+      'If you find no clear issue, or the issue you find is minor and may not explain what the creator is seeing, say so honestly. Then encourage them to test properly before changing the files: try a different system prompt, different settings, and especially a DIFFERENT MODEL. Explain the logic: if the same problem appears across several models and settings, it IS likely the character files (its "guts") need tweaking; if it only happens on one model or setting, then finding the right model/setting will help far more than rewriting the character.',
+      'HARD RULE — you NEVER rewrite the character\'s files for them. You may pinpoint phrases and suggest the KIND of change to consider, but you do not produce rewritten descriptions, instructions, or a finished bot. If the creator asks you to "just rewrite it", gently decline and encourage them to make the change themselves — creating a character is a human craft and the creator understands their intent best.',
+      'Be critical of model output in general: remind them that models can misread good writing, so a flagged phrase is a hypothesis to test, not a proven fault. Be constructive and encouraging, never harsh.',
+      'Structure your answer with short clear sections, e.g. "What I checked", "Phrases worth a look (and why)", and "If this isn\'t it — how to test". Keep it focused and practical.'
+    ].join(' ');
+  }
+
+  function setQuillCreatorStatus(msg, kind) {
+    const el=document.getElementById('djt-quill-creator-status'); if(!el) return;
+    el.textContent=msg||''; el.className='djt-quill-status'+(kind?' '+kind:'');
+  }
+
+  // Pull the character "guts" from the bot form via the page bridge, trimmed
+  // for a local model's context window.
+  function quillBotGutsText(bot) {
+    const cap=(s,n)=>{ s=(s==null?'':String(s)).trim(); return s.length>n ? s.slice(0,n)+' …[truncated]' : s; };
+    const parts=[];
+    if(bot.name) parts.push('[NAME]: '+cap(bot.name,120));
+    if(bot.introduction) parts.push('[INTRODUCTION / FIRST MESSAGE]:\n"""'+cap(bot.introduction,1500)+'"""');
+    if(bot.description) parts.push('[DESCRIPTION / PERSONA]:\n"""'+cap(bot.description,3500)+'"""');
+    if(bot.instructions) parts.push('[INSTRUCTIONS]:\n"""'+cap(bot.instructions,2500)+'"""');
+    if(bot.context) parts.push('[CONTEXT]:\n"""'+cap(bot.context,1500)+'"""');
+    if(bot.examples) parts.push('[EXAMPLE DIALOGUE]:\n"""'+cap(bot.examples,2000)+'"""');
+    if(bot.authorNote) parts.push('[AUTHOR NOTE]:\n"""'+cap(bot.authorNote,1000)+'"""');
+    return parts.join('\n\n');
+  }
+
   // Build a plain-text transcript of the last N messages (or all) for summarizing.
   function quillTranscript(n, fromStart) {
     const ms = getMessages();
@@ -1342,13 +1374,11 @@
   }
 
   function refreshQuillUI() {
-    const off = document.getElementById('djt-quill-chat-off');
-    const main = document.getElementById('djt-quill-chat-main');
-    if (off && main) {
-      const on = quillEnabled();
-      off.style.display = on ? 'none' : '';
-      main.style.display = on ? '' : 'none';
-    }
+    const on = quillEnabled();
+    [['djt-quill-chat-off','djt-quill-chat-main'], ['djt-quill-creator-off','djt-quill-creator-main']].forEach(pair => {
+      const off=document.getElementById(pair[0]); const main=document.getElementById(pair[1]);
+      if (off && main) { off.style.display = on ? 'none' : ''; main.style.display = on ? '' : 'none'; }
+    });
   }
 
   function updateQuillCC() {
@@ -1451,6 +1481,41 @@
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
     a.href=url; a.download='djt-summary-'+String(currentSessionId||'chat').slice(0,8)+'.txt'; a.click(); URL.revokeObjectURL(url);
     toast('Summary saved.');
+  }
+
+  function wireQuillCreator() {
+    const concern=document.getElementById('djt-quill-concern');
+    if(concern) concern.addEventListener('input', ()=>{ const cc=document.getElementById('djt-quill-ccc'); if(cc) cc.textContent=(concern.value||'').length+'/500'; });
+    const btn=document.getElementById('djt-quill-review'); if(btn) btn.addEventListener('click', runQuillReview);
+    quillBindCopy('djt-quill-review-copy','djt-quill-review-text');
+    const cancel=document.getElementById('djt-quill-review-cancel'); if(cancel) cancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-review-out'); if(o) o.style.display='none'; });
+  }
+
+  async function runQuillReview() {
+    if(!quillEnabled()){ setQuillCreatorStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const concernEl=document.getElementById('djt-quill-concern');
+    const concern=concernEl?(concernEl.value||'').trim():'';
+    if(!concern){ setQuillCreatorStatus('Describe what your character is doing first.','bad'); return; }
+    if(!isBotPage()){ setQuillCreatorStatus('Open a bot create or edit page so Quill can read the files.','bad'); return; }
+    const btn=document.getElementById('djt-quill-review');
+    if(btn){ btn.disabled=true; btn.textContent='Reading the form…'; }
+    setQuillCreatorStatus('Reading your character files…','busy');
+    const det=await botGuard();
+    if(!det){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('Could not read the bot form (see the prompt to switch to Legacy).','bad'); return; }
+    const res=await bridgeRequest('export');
+    if(!res||res.error||!res.bot){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('Could not read the character files.','bad'); return; }
+    const guts=quillBotGutsText(res.bot);
+    if(!guts){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('The character files look empty — fill them in first.','bad'); return; }
+    const sys=quillReviewSystem();
+    const user=`The creator describes this concern about their character's behaviour:\n"""${concern}"""\n\nHere are the character's files to analyse:\n\n${guts}`;
+    if(btn){ btn.textContent='Quill is analysing…'; }
+    setQuillCreatorStatus('Analysing with '+(settings.quill.backend)+'…','busy');
+    const out=await quillChat(sys,user,{temperature:0.4,maxTokens:900});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; }
+    if(!out.ok){ setQuillCreatorStatus('Quill error: '+out.error,'bad'); return; }
+    setQuillCreatorStatus('');
+    const o=document.getElementById('djt-quill-review-out'); const t=document.getElementById('djt-quill-review-text');
+    if(t) t.textContent=(out.text||'').trim(); if(o) o.style.display='';
   }
 
   // Generic yes/no confirm using the toolkit's themed modal.
@@ -1662,6 +1727,25 @@
             `</div>` +
           `</div>` +
 
+          // Quill (creator) card — Character Lens
+          `<div class="djt-card" id="djt-quill-creator-card">` +
+            cardH('&#9997; Quill &middot; Character Lens', 'quillcreator') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-creator-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-creator-main" style="display:none">` +
+                `<div class="djt-quill-cap">An analytical second read of your character's files. On a bot create/edit page, describe what your character is doing wrong and Quill looks for wording a model might misread. It will not rewrite your bot for you.</div>` +
+                `<div class="djt-quill-lab">What's happening with your character? <span class="djt-quill-cc" id="djt-quill-ccc">0/500</span></div>` +
+                `<textarea id="djt-quill-concern" class="djt-quill-ta" maxlength="500" placeholder="e.g. My detective keeps obsessing over numbers and measuring things, when he's meant to be habit-driven, not maths-driven."></textarea>` +
+                `<button id="djt-quill-review" class="djt-mini-btn full primary">&#128269; Analyse my character</button>` +
+                `<div id="djt-quill-review-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-review-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-review-copy" class="djt-mini-btn ghost">Copy</button><button id="djt-quill-review-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-creator-status" class="djt-quill-status"></div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
           `<button id="djt-creator-help-btn" class="djt-help-tab">? How to use Creator Tools</button>` +
 
         `</div>` + // end djt-tab-creator
@@ -1771,8 +1855,9 @@
       });
     });
 
-    // Quill (chat) wiring
+    // Quill wiring (chat + creator)
     wireQuillChat();
+    wireQuillCreator();
     refreshQuillUI();
 
     // Draggable + resizable + restore saved position/size
@@ -1822,7 +1907,7 @@
     if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
   }
   function applyAllCardCollapses() {
-    ['stats','regen','scratch','features','quillchat','bottools','lorebook','toolpages'].forEach(applyCardCollapse);
+    ['stats','regen','scratch','features','quillchat','bottools','lorebook','toolpages','quillcreator'].forEach(applyCardCollapse);
   }
 
   function syncToggleStates() {
