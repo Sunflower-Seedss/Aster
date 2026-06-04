@@ -548,6 +548,11 @@
   }
 
   // Case-insensitive, word-boundary matches of `trigger` in `text` -> [{start,end}]
+  // `_` counts as a word character (like DreamJourney's matcher), so a trigger
+  // touching `_` on EITHER side has no boundary and won't match. This is what
+  // makes the underscore-wrap convention work — including multi-word wraps like
+  // `_Imperium Divinum_`, where the inner word "Imperium" is followed by a space
+  // but preceded by `_`, so it is correctly skipped.
   function lbFindMatches(text, trigger) {
     const tLow = trigger.toLowerCase(), txLow = text.toLowerCase();
     const out = []; let idx = 0;
@@ -557,7 +562,7 @@
       const end = pos + tLow.length;
       const before = pos > 0 ? txLow[pos-1] : ' ';
       const after  = end < txLow.length ? txLow[end] : ' ';
-      if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) out.push({ start: pos, end });
+      if (!/[a-z0-9_]/.test(before) && !/[a-z0-9_]/.test(after)) out.push({ start: pos, end });
       idx = pos + 1;
     }
     return out;
@@ -573,8 +578,12 @@
       return true;
     });
   }
+  // Use lbFindUnwrapped (not lbFindMatches) so an explicitly wrapped trigger in
+  // the chat text (/x/ -x- <x>) isn't counted as a direct reference either —
+  // consistent with cascade. (Underscore wraps are already handled in
+  // lbFindMatches, which treats `_` as a word character.)
   function lbDirectHits(message, entry) {
-    return (entry.keys||[]).filter(k=>lbFindMatches(message,k.keyText).length>0).map(k=>k.keyText);
+    return (entry.keys||[]).filter(k=>lbFindUnwrapped(message,k.keyText).length>0).map(k=>k.keyText);
   }
   function lbCascadeHits(body, target) {
     return (target.keys||[]).filter(k=>lbFindUnwrapped(body,k.keyText).length>0).map(k=>k.keyText);
