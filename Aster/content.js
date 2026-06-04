@@ -1209,6 +1209,9 @@
       if (!dragging) return;
       dragging = false;
       panel.classList.remove('djt-no-anim');
+      // A real drag (reposition) fires a synthetic click afterwards; flag it so the
+      // panel's click-to-expand fallback doesn't treat the reposition as a tap.
+      if (dragMoved) { panelDragMoved = true; setTimeout(() => { panelDragMoved = false; }, 200); }
       const collapsed = panel.classList.contains('djt-collapsed');
       if (!dragMoved && collapsed) {
         // Tap (no real movement) on the sun bubble - expand the panel, then make
@@ -1989,6 +1992,7 @@
     });
     // Belt-and-suspenders expand for mobile
     p.addEventListener('click', () => {
+      if (panelDragMoved) return;   // ignore the synthetic click after a reposition
       if (p.classList.contains('djt-collapsed')) {
         p.classList.remove('djt-collapsed');
         settings.panelCollapsed = false; saveSettings();
@@ -2183,6 +2187,7 @@
   let botBackupMeta = null; // {ts, botId}
   let botMode = false;
   let genericMode = false;   // panel present on a non-session/non-bot DJ page
+  let panelDragMoved = false; // true briefly after a real drag, to suppress the expand-on-click
 
   function injectBotBridge() {
     if (bridgeInjected) return;
