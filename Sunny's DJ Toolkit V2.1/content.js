@@ -9,7 +9,7 @@
 
   const SETTINGS_KEY = 'djt:settings';
   let currentSessionId = null, active = false;
-  let containerObserver = null, scratchpadInterval = null;
+  let containerObserver = null, scratchpadInterval = null, observedContainer = null;
   const storeKey = () => 'djt:' + currentSessionId;
 
   const DEFAULT_SETTINGS = {
@@ -187,6 +187,7 @@
       if (added||removed) { clearTimeout(statsDebounce); statsDebounce=setTimeout(refreshStatsUI,250); clearTimeout(thinkingDebounce); thinkingDebounce=setTimeout(refreshThinkingButtons,600); if(scanActive){clearTimeout(scanDebounce);scanDebounce=setTimeout(runChatScan,400);} if(panelActive){clearTimeout(panelDebounce);panelDebounce=setTimeout(updateActiveChatPanel,500);} }
     });
     containerObserver.observe(c,{childList:true,subtree:true});
+    observedContainer = c;
   }
 
   // ---- DELEGATION --------------------------------------------
@@ -1784,7 +1785,17 @@
     switchTab(settings.activeTab); applyAllCardCollapses();
     startContainerObserver(); hookScratchpad();
     refreshStatsUI(); refreshRegenPanel(); refreshThinkingButtons(); maybeOfferRestore(); maybeStartScanner();
-    if(!scratchpadInterval) scratchpadInterval=setInterval(()=>{ if(active){hookScratchpad();refreshThinkingButtons();if(scanActive)runChatScan();} },3000);
+    if(!scratchpadInterval) scratchpadInterval=setInterval(()=>{ if(active){
+      // Re-attach the observer if DreamJourney replaced the chat container
+      // (hard-refresh hydration recovery, React #418/#422, swaps the .scrollchatmessages
+      // node out from under us, orphaning the observer and freezing the stats).
+      const c=getContainer();
+      if(c&&c!==observedContainer) startContainerObserver();
+      // Self-heal the stats: the initial post-load count can run before bot avatars
+      // render (counts everything as user → N/0/N). Recompute periodically so it corrects.
+      refreshStatsUI();
+      hookScratchpad();refreshThinkingButtons();if(scanActive)runChatScan();
+    } },3000);
   }
   // Bot create/edit pages: build the panel (Creator tab) without chat wiring.
   async function activateBotMode() {
@@ -1801,6 +1812,7 @@
     active=false; botMode=false; stopBotAutosave();
     hasScrolledToTop=false;
     if(containerObserver){containerObserver.disconnect();containerObserver=null;}
+    observedContainer=null;
     if(scratchpadInterval){clearInterval(scratchpadInterval);scratchpadInterval=null;}
     clearTimeout(statsDebounce); clearTimeout(thinkingDebounce); clearTimeout(panelUpdateTo); clearTimeout(panelDebounce);
     const p=document.getElementById('djt-panel');if(p)p.remove(); hideRestoreBar();
