@@ -1846,7 +1846,13 @@
 
   function renderDataManager() {
     const body = document.getElementById('djt-dm-body'); if (!body) return;
-    chrome.storage.local.get(null, all => {
+    let done = false;
+    const timeout = setTimeout(() => {
+      if (!done) { body.innerHTML = '<div class="djt-lb-msg err">Storage read timeout. Try refreshing.</div>'; done = true; }
+    }, 3000);
+    try {
+      chrome.storage.local.get(null, all => {
+        clearTimeout(timeout); if (done) return; done = true;
       all = all || {};
       const sessions = [], backups = [];
       let lib = [], activeLB = null, settingsSize = 0, total = 0;
@@ -1884,7 +1890,8 @@
       html += dmSection('Active lorebook', activeLB ? activeLB.size : 0, '', activeRows);
       html += dmSection('Toolkit settings', settingsSize, `<button class="djt-dm-clear" data-act="resetSettings">Reset</button>`, `<div class="djt-dm-rmeta" style="padding:6px 2px">Your preferences (theme, toggles, panel position). Resetting keeps all saved data above.</div>`);
       body.innerHTML = html;
-    });
+      });
+    } catch (e) { body.innerHTML = '<div class="djt-lb-msg err">Error reading storage.</div>'; }
   }
 
   // ---- LIFECYCLE --------------------------------------------
@@ -1897,6 +1904,10 @@
     switchTab(settings.activeTab); applyAllCardCollapses();
     startContainerObserver(); hookScratchpad();
     refreshStatsUI(); refreshRegenPanel(); refreshThinkingButtons(); maybeOfferRestore(); maybeStartScanner();
+    // On a hard refresh, the page may finish painting the message nodes after
+    // activate() runs, so recount once more after a brief delay to catch a
+    // premature early count. The observer will keep it fresh after this.
+    setTimeout(() => { if (active && currentSessionId === sid) refreshStatsUI(); }, 1800);
     if(!scratchpadInterval) scratchpadInterval=setInterval(()=>{ if(active){hookScratchpad();refreshThinkingButtons();if(scanActive)runChatScan();} },3000);
   }
   // Bot create/edit pages: build the panel (Creator tab) without chat wiring.
