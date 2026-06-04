@@ -7,7 +7,7 @@ Part of [Sunflower Fields](https://sunflower-seedss.github.io/Sunflower-Seeds-Ho
 
 Aster adds a friendly on-page panel to your DreamJourney chats and bot pages — for tracking, tidying, writing and building. All data is stored locally on your device; nothing is uploaded anywhere (the only exception is the optional **Quill** assistant, which talks to a language model *you* choose and connect).
 
-> The extension lives in the `Sunny's DJ Toolkit V2.1/` folder. See its [README](./Sunny's%20DJ%20Toolkit%20V2.1/README.md) for the full breakdown.
+> The extension lives in the `Aster/` folder. See its [README](./Aster/README.md) for the full breakdown.
 
        ₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚
 
@@ -46,7 +46,7 @@ Quill connects Aster to a language model **you** choose — local (Ollama, LM St
 
 1. Download / clone this repo.
 2. Go to `chrome://extensions` and enable **Developer mode**.
-3. **Load unpacked** → select the `Sunny's DJ Toolkit V2.1` folder.
+3. **Load unpacked** → select the `Aster` folder.
 4. Open a DreamJourney chat — the panel appears automatically. Click the Aster icon in your browser bar for settings.
 
 ## 🖥️ Browser support
