@@ -23,7 +23,8 @@ var VIS_SECTIONS = [
   { key:'bottools',     label:'Bot Tools',              group:'Creator Tools' },
   { key:'lorebook',     label:'Lorebook Tools',         group:'Creator Tools' },
   { key:'toolpages',    label:'Tool Pages',             group:'Creator Tools' },
-  { key:'quillcreator', label:'Quill (Character Lens)', group:'Creator Tools' }
+  { key:'quillcreator', label:'Quill (Character Lens)', group:'Creator Tools' },
+  { key:'quillimport',  label:'Quill (Import a character)', group:'Creator Tools' }
 ];
 
 var settings = null;

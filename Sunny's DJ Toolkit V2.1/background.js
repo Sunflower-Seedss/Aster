@@ -121,6 +121,7 @@ async function chat(cfg, messages, opts) {
       };
       if (typeof opts.temperature === 'number') body.options.temperature = opts.temperature;
       if (typeof opts.maxTokens === 'number') body.options.num_predict = opts.maxTokens;
+      if (opts.json) body.format = 'json';   // constrain to valid JSON
       const r = await fetch(ep.base + '/api/chat', {
         method: 'POST', headers: authHeaders(ep), body: JSON.stringify(body)
       });
@@ -131,6 +132,7 @@ async function chat(cfg, messages, opts) {
       const body = { model: ep.model, messages };
       if (typeof opts.temperature === 'number') body.temperature = opts.temperature;
       if (typeof opts.maxTokens === 'number') body.max_tokens = opts.maxTokens;
+      if (opts.json) body.response_format = { type: 'json_object' };   // constrain to valid JSON
       const r = await fetch(ep.base + '/chat/completions', {
         method: 'POST', headers: authHeaders(ep), body: JSON.stringify(body)
       });
