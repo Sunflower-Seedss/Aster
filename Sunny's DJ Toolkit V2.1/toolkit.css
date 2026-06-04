@@ -660,3 +660,34 @@
   text-decoration-color: #a78bfa;
   text-decoration-thickness: 2px;
 }
+
+/* ---------- QUILL ---------- */
+.djt-quill-sub { font-size: 12px; font-weight: 700; color: var(--djt-text); margin: 2px 0 2px; }
+.djt-quill-cap { font-size: 11px; color: var(--djt-muted); line-height: 1.4; margin-bottom: 8px; }
+.djt-quill-lab { font-size: 11px; color: var(--djt-soft); margin: 10px 0 5px; display: flex; justify-content: space-between; align-items: center; }
+.djt-quill-cc { font-size: 10px; color: var(--djt-muted); }
+.djt-quill-hint { font-size: 10px; color: var(--djt-accent); margin-top: 4px; }
+.djt-seg { display: flex; gap: 5px; }
+.djt-seg-wrap { flex-wrap: wrap; }
+.djt-seg button {
+  flex: 1; min-width: 40px; padding: 6px 4px; background: var(--djt-surface);
+  border: 1px solid var(--djt-accent-bdr); border-radius: 6px; color: var(--djt-soft);
+  font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.djt-seg button.on { background: var(--djt-accent-dim); color: var(--djt-accent); border-color: var(--djt-accent); }
+.djt-seg button:hover { color: var(--djt-text); }
+.djt-quill-select, .djt-quill-ta {
+  width: 100%; margin-top: 6px; padding: 7px 8px; background: var(--djt-surface);
+  border: 1px solid var(--djt-accent-bdr); border-radius: 6px; color: var(--djt-text);
+  font-size: 12px; font-family: inherit;
+}
+.djt-quill-ta { resize: vertical; min-height: 46px; margin-bottom: 8px; }
+.djt-quill-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--djt-soft); margin: 8px 0; cursor: pointer; }
+.djt-quill-divider { height: 1px; background: var(--djt-accent-bdr); opacity: 0.5; margin: 14px 0 10px; }
+.djt-quill-out { margin-top: 10px; padding: 8px; background: var(--djt-surface); border: 1px solid var(--djt-accent-bdr); border-radius: 6px; }
+.djt-quill-out-text { font-size: 12px; color: var(--djt-text); line-height: 1.5; white-space: pre-wrap; max-height: 220px; overflow-y: auto; margin-bottom: 8px; }
+.djt-quill-out-btns { display: flex; gap: 5px; flex-wrap: wrap; }
+.djt-quill-out-btns .djt-mini-btn { flex: 1; min-width: 56px; }
+.djt-quill-status { font-size: 11px; min-height: 14px; margin-top: 8px; text-align: center; color: var(--djt-muted); }
+.djt-quill-status.busy { color: var(--djt-soft); }
+.djt-quill-status.bad { color: #ef4444; }

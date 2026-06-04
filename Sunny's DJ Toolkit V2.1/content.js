@@ -1264,6 +1264,189 @@
   const toggleRow = (key, label) =>
     `<div class="djt-toggle-row"><span>${label}</span><label class="djt-switch"><input type="checkbox" id="djt-t-${key}" checked><span class="djt-slider"></span></label></div>`;
 
+  // ---- QUILL (local-LLM / API writing helper) ----------------
+  const QUILL_STRENGTH_HINTS = {
+    1:'Grammar &amp; spelling only', 2:'Light polish', 3:'Improve flow &amp; clarity',
+    4:'Rewrite, keep my meaning', 5:'Full creative rewrite from a rough note'
+  };
+  const QUILL_PRESETS = [
+    { label:'Keep my voice',        text:'Preserve my personal writing voice and vocabulary. Only elevate clarity and flow.' },
+    { label:'More vivid',           text:'Add sensory detail and stronger verbs, but keep my actions and intent exactly as written.' },
+    { label:"Match the bot's tone", text:"Mirror the tone, register and energy of the bot's last message." },
+    { label:'Tighter',              text:'Make it more concise and economical without losing meaning.' },
+    { label:'Immersive RP',         text:'Write it as immersive first-person roleplay prose in present tense.' }
+  ];
+  const quillState = { strength:2, tone:'none', length:'medium', sumCount:10 };
+
+  // Round-trip a chat request through the background service worker (the
+  // network boundary that dodges the HTTPS page's mixed-content/CORS block).
+  function quillChat(system, user, opts) {
+    return new Promise(resolve => {
+      let done=false; const finish=r=>{ if(done) return; done=true; resolve(r); };
+      try {
+        chrome.runtime.sendMessage(
+          { type:'quill.chat', cfg:settings.quill, messages:[{role:'system',content:system},{role:'user',content:user}], opts:opts||{} },
+          res => { if(chrome.runtime.lastError){ finish({ok:false,error:chrome.runtime.lastError.message}); return; } finish(res||{ok:false,error:'No response from the Quill worker.'}); }
+        );
+      } catch(e){ finish({ok:false,error:String(e&&e.message||e)}); }
+      setTimeout(()=>finish({ok:false,error:'Timed out waiting for the model (is it still loading?).'}), 120000);
+    });
+  }
+
+  function quillImproveSystem(strength, tone, length) {
+    const rules = {
+      1:'Make ONLY minimal corrections: spelling, punctuation and obvious grammar. Keep the wording, length and style essentially identical.',
+      2:"Lightly polish grammar and phrasing for readability. Keep the user's wording and length close to the original.",
+      3:'Improve flow, clarity and word choice. You may restructure sentences, but keep the same events, length and intent.',
+      4:'Rewrite the message into stronger prose while preserving every action, intent and fact the user stated. Do not add new events.',
+      5:'Fully rewrite the user\'s rough note into a polished, vivid but ACCURATE short paragraph. Expand only on what the user implied (for example "I go and sit down" may become a richer description of them sitting down) without inventing new plot, new characters, locations, or outcomes the user did not state.'
+    };
+    const toneLine = (tone && tone!=='none') ? `Write in a ${tone} tone.` : '';
+    const lenLine = { short:'Keep it short, roughly 1-2 sentences.', medium:'Keep it to a short paragraph.', long:'A fuller paragraph is fine, but do not pad it out.' }[length] || '';
+    return [
+      'You are Quill, a writing assistant embedded in a roleplay chat tool. You improve the USER\'s own message before they send it.',
+      rules[strength] || rules[2], toneLine, lenLine,
+      'Hard rules: stay in first person as the user. NEVER write dialogue or actions for the bot or any other character. NEVER answer the message or continue the scene. NEVER add plot points, locations, or outcomes the user did not state or clearly imply.',
+      'Output ONLY the improved message text: no preamble, no quotation marks, no explanation, no alternatives.'
+    ].filter(Boolean).join(' ');
+  }
+
+  function quillSummarizeSystem() {
+    return [
+      'You are Quill, a writing assistant embedded in a roleplay chat tool.',
+      'Summarize the conversation transcript the user provides into clear, concise KEY BULLET POINTS.',
+      'Capture important events, decisions, character states and relationships, locations, and any unresolved threads, in rough chronological order.',
+      'Be strictly factual to the transcript. Do NOT invent details, do NOT speculate, and do NOT continue the story.',
+      'Output ONLY a bulleted list using "- " for each point. No preamble and no closing remarks.'
+    ].join(' ');
+  }
+
+  // Build a plain-text transcript of the last N messages (or all) for summarizing.
+  function quillTranscript(n, fromStart) {
+    const ms = getMessages();
+    const slice = fromStart ? ms : ms.slice(Math.max(0, ms.length - n));
+    return slice.map(el => (isBot(el) ? 'BOT: ' : 'USER: ') + msgText(el)).filter(s => s.length > 5).join('\n\n');
+  }
+
+  function quillEnabled() { return !!(settings.quill && settings.quill.enabled); }
+
+  function setQuillStatus(msg, kind) {
+    const el = document.getElementById('djt-quill-status'); if(!el) return;
+    el.textContent = msg || ''; el.className = 'djt-quill-status' + (kind ? ' '+kind : '');
+  }
+
+  function refreshQuillUI() {
+    const off = document.getElementById('djt-quill-chat-off');
+    const main = document.getElementById('djt-quill-chat-main');
+    if (off && main) {
+      const on = quillEnabled();
+      off.style.display = on ? 'none' : '';
+      main.style.display = on ? '' : 'none';
+    }
+  }
+
+  function updateQuillCC() {
+    const ta=document.getElementById('djt-quill-custom'); const cc=document.getElementById('djt-quill-cc');
+    if(ta&&cc) cc.textContent=(ta.value||'').length+'/500';
+  }
+  function quillBindCopy(btnId, textId) {
+    const b=document.getElementById(btnId); if(!b) return;
+    b.addEventListener('click', ()=>{ const t=document.getElementById(textId); if(!t||!t.textContent) return; try{ navigator.clipboard.writeText(t.textContent); toast('Copied.'); }catch(e){ toast('Copy failed.'); } });
+  }
+
+  function wireQuillChat() {
+    const seg=(id,onPick)=>{ const wrap=document.getElementById(id); if(!wrap) return; wrap.addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; [...wrap.querySelectorAll('button')].forEach(x=>x.classList.toggle('on', x===b)); onPick(b.dataset.v); }); };
+    seg('djt-quill-strength', v=>{ quillState.strength=+v; const h=document.getElementById('djt-quill-strength-hint'); if(h) h.innerHTML=QUILL_STRENGTH_HINTS[v]||''; });
+    seg('djt-quill-tone',     v=>{ quillState.tone=v; });
+    seg('djt-quill-length',   v=>{ quillState.length=v; });
+    seg('djt-quill-sumcount', v=>{ quillState.sumCount=+v; });
+
+    const presetSel=document.getElementById('djt-quill-preset');
+    if(presetSel){
+      QUILL_PRESETS.forEach((p,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=p.label; presetSel.appendChild(o); });
+      presetSel.addEventListener('change', ()=>{ if(presetSel.value==='') return; const ta=document.getElementById('djt-quill-custom'); if(ta){ ta.value=QUILL_PRESETS[+presetSel.value].text; updateQuillCC(); } presetSel.value=''; });
+    }
+    const custom=document.getElementById('djt-quill-custom'); if(custom) custom.addEventListener('input', updateQuillCC);
+
+    const improveBtn=document.getElementById('djt-quill-improve'); if(improveBtn) improveBtn.addEventListener('click', runQuillImprove);
+    const useBtn=document.getElementById('djt-quill-use'); if(useBtn) useBtn.addEventListener('click', ()=>{ const ta=document.querySelector('textarea[placeholder="Send your message..."]'); const t=document.getElementById('djt-quill-out-text'); if(ta&&t){ setReactValue(ta,t.textContent); ta.focus(); toast('Applied to your message box.'); } else { toast('Could not find the chat box.'); } });
+    quillBindCopy('djt-quill-copy','djt-quill-out-text');
+    const redoBtn=document.getElementById('djt-quill-redo'); if(redoBtn) redoBtn.addEventListener('click', runQuillImprove);
+    const cancelBtn=document.getElementById('djt-quill-cancel'); if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-out'); if(o) o.style.display='none'; });
+
+    const sumBtn=document.getElementById('djt-quill-summarize'); if(sumBtn) sumBtn.addEventListener('click', runQuillSummarize);
+    quillBindCopy('djt-quill-sum-copy','djt-quill-sum-text');
+    const sumDl=document.getElementById('djt-quill-sum-dl'); if(sumDl) sumDl.addEventListener('click', downloadQuillSummary);
+    const sumCancel=document.getElementById('djt-quill-sum-cancel'); if(sumCancel) sumCancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-sum-out'); if(o) o.style.display='none'; });
+  }
+
+  async function runQuillImprove() {
+    if(!quillEnabled()){ setQuillStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const ta=document.querySelector('textarea[placeholder="Send your message..."]');
+    const draft=ta?(ta.value||'').trim():'';
+    if(!draft){ setQuillStatus('Type a message in the chat box first.','bad'); return; }
+    const lb=lastBot(); const lastBotText=lb?msgText(lb):'';
+    const customEl=document.getElementById('djt-quill-custom'); const custom=customEl?(customEl.value||'').trim():'';
+    const sys=quillImproveSystem(quillState.strength, quillState.tone, quillState.length);
+    const ctx = lastBotText ? `For context, the bot's last message was:\n"""${lastBotText.slice(0,1600)}"""\n\n` : '';
+    const extra = custom ? `Extra instruction from me: ${custom}\n\n` : '';
+    const user = `${ctx}${extra}Here is my draft message to improve:\n"""${draft}"""`;
+    const maxTokens = {short:200,medium:450,long:800}[quillState.length]||450;
+    const btn=document.getElementById('djt-quill-improve');
+    if(btn){ btn.disabled=true; btn.textContent='Quill is writing…'; }
+    setQuillStatus('Asking '+(settings.quill.backend)+'…','busy');
+    const res=await quillChat(sys,user,{temperature:0.7,maxTokens});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#9997; Improve my message'; }
+    if(!res.ok){ setQuillStatus('Quill error: '+res.error,'bad'); return; }
+    setQuillStatus('');
+    const out=document.getElementById('djt-quill-out'); const t=document.getElementById('djt-quill-out-text');
+    if(t) t.textContent=(res.text||'').trim(); if(out) out.style.display='';
+  }
+
+  async function runQuillSummarize() {
+    if(!quillEnabled()){ setQuillStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const fromStart=!!(document.getElementById('djt-quill-fromstart')||{}).checked;
+    if(fromStart){
+      const ok=await djtConfirm('Summarize from the start?', 'When summarizing large chats, the output will be entirely dependent on the size and context window of the model you have attached to Quill. Very long chats may be truncated or lose detail.');
+      if(!ok) return;
+    }
+    const transcript=quillTranscript(quillState.sumCount, fromStart);
+    if(!transcript){ setQuillStatus('No messages to summarize yet.','bad'); return; }
+    const sys=quillSummarizeSystem();
+    const user='Transcript to summarize:\n\n'+transcript;
+    const maxTokens = fromStart ? 1200 : Math.min(1000, 250 + quillState.sumCount*40);
+    const btn=document.getElementById('djt-quill-summarize');
+    if(btn){ btn.disabled=true; btn.textContent='Quill is reading…'; }
+    setQuillStatus('Summarizing…','busy');
+    const res=await quillChat(sys,user,{temperature:0.3,maxTokens});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#128221; Summarize'; }
+    if(!res.ok){ setQuillStatus('Quill error: '+res.error,'bad'); return; }
+    setQuillStatus('');
+    const out=document.getElementById('djt-quill-sum-out'); const t=document.getElementById('djt-quill-sum-text');
+    if(t) t.textContent=(res.text||'').trim(); if(out) out.style.display='';
+  }
+
+  function downloadQuillSummary() {
+    const t=document.getElementById('djt-quill-sum-text'); if(!t||!t.textContent.trim()) return;
+    const header='Chat summary by Quill - Sunny\'s Dreamjourney Toolkit\nSession: '+(currentSessionId||'')+'\n'+''.padEnd(42,'-')+'\n\n';
+    const blob=new Blob([header+t.textContent], {type:'text/plain'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download='djt-summary-'+String(currentSessionId||'chat').slice(0,8)+'.txt'; a.click(); URL.revokeObjectURL(url);
+    toast('Summary saved.');
+  }
+
+  // Generic yes/no confirm using the toolkit's themed modal.
+  function djtConfirm(title, body) {
+    return new Promise(resolve => {
+      const ov=document.createElement('div'); ov.className='djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme||'dark'); ov.setAttribute('data-djt-skin', settings.skin||'dreamjourney');
+      const safe=(body||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      ov.innerHTML=`<div class="djt-modal"><h2>${title}</h2><p class="djt-modal-hint">${safe}</p><div class="djt-modal-btns"><button class="djt-btn ghost" data-v="cancel">Cancel</button><button class="djt-btn primary" data-v="yes">Continue</button></div></div>`;
+      document.body.appendChild(ov);
+      ov.addEventListener('click', e=>{ const b=e.target.closest('[data-v]'); if(!b) return; ov.remove(); resolve(b.dataset.v==='yes'); });
+    });
+  }
+
   function buildPanel() {
     if(document.getElementById('djt-panel')) return;
     const p = document.createElement('div'); p.id = 'djt-panel';
@@ -1355,6 +1538,54 @@
             `<button id="djt-scroll-top-btn" class="djt-mini-btn full djt-dl-btn">↑ Scroll to first message</button>` +
             `<button id="djt-download" class="djt-mini-btn full djt-dl-btn">⬇ Download chat (.txt)</button>` +
             `<button id="djt-scroll-bottom-btn" class="djt-mini-btn full djt-dl-btn">↓ Back to bottom</button>` +
+          `</div>` +
+
+          // Quill (chat) card
+          `<div class="djt-card" id="djt-quill-chat-card">` +
+            cardH('&#9997; Quill', 'quillchat') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-chat-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-chat-main" style="display:none">` +
+                // Improve my message
+                `<div class="djt-quill-sub">Improve my message</div>` +
+                `<div class="djt-quill-cap">Polishes the text in your message box, using the bot's last message as context.</div>` +
+                `<div class="djt-quill-lab">Strength</div>` +
+                `<div class="djt-seg" id="djt-quill-strength">` +
+                  [1,2,3,4,5].map(n=>`<button data-v="${n}"${n===2?' class="on"':''}>${n}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-hint" id="djt-quill-strength-hint">Light polish</div>` +
+                `<div class="djt-quill-lab">Tone</div>` +
+                `<div class="djt-seg djt-seg-wrap" id="djt-quill-tone">` +
+                  [['none','Neutral'],['casual','Casual'],['sarcastic','Sarcastic'],['dark','Dark'],['descriptive','Descriptive']].map(t=>`<button data-v="${t[0]}"${t[0]==='none'?' class="on"':''}>${t[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Length</div>` +
+                `<div class="djt-seg" id="djt-quill-length">` +
+                  [['short','Short'],['medium','Medium'],['long','Long']].map(l=>`<button data-v="${l[0]}"${l[0]==='medium'?' class="on"':''}>${l[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Tell Quill what you want <span class="djt-quill-cc" id="djt-quill-cc">0/500</span></div>` +
+                `<select id="djt-quill-preset" class="djt-quill-select"><option value="">Load a preset…</option></select>` +
+                `<textarea id="djt-quill-custom" class="djt-quill-ta" maxlength="500" placeholder="e.g. keep my voice; add tension; mirror the bot's tone"></textarea>` +
+                `<button id="djt-quill-improve" class="djt-mini-btn full primary">&#9997; Improve my message</button>` +
+                `<div id="djt-quill-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-out-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-use" class="djt-mini-btn">Use this</button><button id="djt-quill-copy" class="djt-mini-btn ghost">Copy</button><button id="djt-quill-redo" class="djt-mini-btn ghost">Redo</button><button id="djt-quill-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                // Summarize
+                `<div class="djt-quill-divider"></div>` +
+                `<div class="djt-quill-sub">Summarize chat &rarr; bullet points</div>` +
+                `<div class="djt-quill-lab">How many recent messages</div>` +
+                `<div class="djt-seg" id="djt-quill-sumcount">` +
+                  [5,10,15,20].map(n=>`<button data-v="${n}"${n===10?' class="on"':''}>${n}</button>`).join('') +
+                `</div>` +
+                `<label class="djt-quill-check"><input type="checkbox" id="djt-quill-fromstart"> From the start</label>` +
+                `<button id="djt-quill-summarize" class="djt-mini-btn full">&#128221; Summarize</button>` +
+                `<div id="djt-quill-sum-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-sum-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-sum-dl" class="djt-mini-btn">&#11015; Save .txt</button><button id="djt-quill-sum-copy" class="djt-mini-btn ghost">Copy</button><button id="djt-quill-sum-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-status" class="djt-quill-status"></div>` +
+              `</div>` +
+            `</div>` +
           `</div>` +
 
           `<button id="djt-help-btn" class="djt-help-tab">? How to use this toolkit</button>` +
@@ -1523,6 +1754,10 @@
       });
     });
 
+    // Quill (chat) wiring
+    wireQuillChat();
+    refreshQuillUI();
+
     // Draggable + resizable + restore saved position/size
     initDrag(p);
     initResize(p);
@@ -1570,7 +1805,7 @@
     if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
   }
   function applyAllCardCollapses() {
-    ['stats','regen','scratch','features','bottools','lorebook','toolpages'].forEach(applyCardCollapse);
+    ['stats','regen','scratch','features','quillchat','bottools','lorebook','toolpages'].forEach(applyCardCollapse);
   }
 
   function syncToggleStates() {
@@ -1880,7 +2115,7 @@
       if (typeof nv.theme === 'string') settings.theme = nv.theme;
       if (nv.hidden && typeof nv.hidden === 'object') settings.hidden = nv.hidden;
       if (nv.quill && typeof nv.quill === 'object') settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, nv.quill);
-      if (document.getElementById('djt-panel')) { setSkin(settings.skin); setTheme(settings.theme); }
+      if (document.getElementById('djt-panel')) { setSkin(settings.skin); setTheme(settings.theme); refreshQuillUI(); }
     });
   } catch (e) {}
 
