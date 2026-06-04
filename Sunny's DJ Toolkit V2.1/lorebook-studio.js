@@ -1,4 +1,4 @@
-// Sunny's Dreamjourney Toolkit V2 - Lorebook Workshop
+// Aster - Lorebook Workshop
 // Made by SunflowerS at Dreamjourney AI
 // External file because extension-page CSP blocks inline <script>.
 (function () {

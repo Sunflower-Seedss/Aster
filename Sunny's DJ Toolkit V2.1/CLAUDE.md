@@ -1,4 +1,4 @@
-# Sunny's DreamJourney Toolkit V2 — Developer Context
+# Aster (DreamJourney Toolkit) — Developer Context
 
 Made by SunflowerS at DreamJourney AI. QoL browser extension for https://www.dreamjourneyai.com
 
@@ -19,7 +19,7 @@ A Chromium extension (Manifest V3) that injects a floating panel into DreamJourn
 - **lorebook-studio.html + lorebook-studio.js** — standalone tabbed tool page (Merge / Wrap All Triggers / Wrap a Snippet / Remove Wrapping / Format Checker), opened from Creator Tools → Tool Pages. Reuses help.js for theme toggle. Logic lives in **lorebook-studio.js** (external file — extension-page CSP blocks inline `<script>`; an inline block here is exactly why only the first tab worked in an earlier build). Wrap/merge behaviors ported verbatim from the original standalone tools (Merger, Cascade Destroyer, Cascade Buster, Recascadanator). Format Checker validates a pasted lorebook against DreamJourney's required shape (top-level + per-entry fields, every entry must have ≥1 `keyText` trigger) and lists issues by entry name.
 - **creator-tools-help.html** — plain-language explainer for the in-extension Creator tools (Load Lorebook, Message Tester, Active Chat Scanner, Active Chat Panel) and Lorebook Workshop. Opened from the Creator Tools "? How to use" button. Reuses help.js.
 - **dj-bridge.js** — MAIN-world helper injected on bot create/edit pages. Reaches React / react-hook-form to read & write the bot. See "Bot export / import" below.
-- **manifest.json** — MV3, matches both `dreamjourneyai.com/*` and `www.dreamjourneyai.com/*`. Name "Sunny's Dreamjourney Toolkit V2", version 2.1. `dj-bridge.js` is a `web_accessible_resource`.
+- **manifest.json** — MV3, matches both `dreamjourneyai.com/*` and `www.dreamjourneyai.com/*`. Name "Aster", version 2.1. `dj-bridge.js` is a `web_accessible_resource`.
 
 DreamJourney is a **Next.js SPA**. Content scripts only inject on real page loads. Route changes are detected by patching `history.pushState/replaceState` + popstate + 500ms polling. The lifecycle has two modes: `activate(sessionId)` for `/app/session/*` (chat panel) and `activateBotMode()` for `/app/create/bot/*` (panel on Creator tab, no chat wiring). `deactivate()` tears either down. `onRouteChange()` routes between them; `botMode` flag distinguishes.
 

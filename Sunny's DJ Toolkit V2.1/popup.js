@@ -1,4 +1,4 @@
-// Sunny's Dreamjourney Toolkit V2 - Settings Window
+// Aster - Settings Window
 // Made by SunflowerS at Dreamjourney AI
 'use strict';
 

@@ -1,5 +1,5 @@
 // ============================================================
-//  Sunny's Dreamjourney Toolkit V2 - content script v3.0
+//  Aster - content script v3.0
 //  Made by SunflowerS at Dreamjourney AI
 // ============================================================
 (function () {
@@ -518,7 +518,7 @@
       const name = backBtn?.parentElement?.querySelector('p[class*="font-bold"]')?.innerText?.trim();
       return (name || '').slice(0, 50) || 'Bot';
     })();
-    const lines = ["Sunny's Dreamjourney Toolkit V2 Chat Export",
+    const lines = ["Aster Chat Export",
       'Made by SunflowerS at Dreamjourney AI', 'Character: ' + charName,
       'Session: ' + currentSessionId, 'Exported: ' + new Date().toLocaleString(),
       ''.padEnd(60, '-'), ''];
@@ -1477,7 +1477,7 @@
 
   function downloadQuillSummary() {
     const t=document.getElementById('djt-quill-sum-text'); if(!t||!t.textContent.trim()) return;
-    const header='Chat summary by Quill - Sunny\'s Dreamjourney Toolkit\nSession: '+(currentSessionId||'')+'\n'+''.padEnd(42,'-')+'\n\n';
+    const header='Chat summary by Quill - Aster\nSession: '+(currentSessionId||'')+'\n'+''.padEnd(42,'-')+'\n\n';
     const blob=new Blob([header+t.textContent], {type:'text/plain'});
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
     a.href=url; a.download='djt-summary-'+String(currentSessionId||'chat').slice(0,8)+'.txt'; a.click(); URL.revokeObjectURL(url);
@@ -1673,7 +1673,7 @@
       // HEAD
       `<div id="djt-head">` +
         `<img id="djt-sun-icon" src="${sunIconUrl}" alt="☀️" draggable="false" onerror="this.outerHTML='<span id=\\'djt-sun-icon\\' style=\\'font-size:20px;flex-shrink:0\\'>☀️</span>'">` +
-        `<span class="djt-title">Sunny’s Toolkit</span>` +
+        `<span class="djt-title">Aster</span>` +
         `<div class="djt-head-btns">` +
           `<button id="djt-theme-btn" class="djt-icon-btn" title="Toggle light/dark">☀️</button>` +
           `<button id="djt-collapse" title="Collapse">–</button>` +
@@ -2187,7 +2187,7 @@
   function botEnvelope(bot) {
     return JSON.stringify({
       _type: 'dreamjourney-bot',
-      _toolkit: "Sunny's DJ Toolkit V2.1",
+      _toolkit: "Aster",
       _exportedAt: new Date().toISOString(),
       bot
     }, null, 2);

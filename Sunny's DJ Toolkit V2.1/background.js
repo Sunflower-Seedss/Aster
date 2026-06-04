@@ -1,5 +1,5 @@
 // ============================================================
-//  Sunny's Dreamjourney Toolkit V2 - background service worker
+//  Aster - background service worker
 //  Made by SunflowerS at Dreamjourney AI
 //
 //  Sole purpose right now: be the network boundary for "Quill".
