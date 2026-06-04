@@ -12,9 +12,11 @@ A Chromium extension (Manifest V3) that injects a floating panel into DreamJourn
 
 ## Architecture
 
-- **content.js** — single content script, injects on `(www.)dreamjourneyai.com/*`
+- **content.js** — single content script, injects on `(www.)dreamjourneyai.com/*`. The on-page panel, stats, saved replies, scratchpad, lorebook tools, bot export/import, AND all Quill UI.
 - **toolkit.css** — all panel styles, injected alongside content.js
-- **popup.html/js** — extension icon popup (mini stats view)
+- **background.js** — MV3 service worker. The **network boundary for Quill** (see "Quill" below): a content-script fetch to a local `http://localhost` LLM from the HTTPS DJ page is blocked (mixed content + CORS), so all Quill calls route content.js → `chrome.runtime.sendMessage` → background → fetch. Message contract: `quill.test` / `quill.models` / `quill.chat`.
+- **popup.html/js** — the extension-icon **Settings window** (NOT a stats view anymore): Appearance (skin + light/dark), Panel sections (hide/show toggles → `settings.hidden`), and Advanced › Quill connection (gated behind an "I understand" checkbox). Changes apply on **Save**.
+- **quill-guide.html** — Quill explainer / setup / safety page, linked from the popup. Reuses help.js for theme/skin.
 - **help.html + help.js** — help page opened in new tab (help.js is external because inline scripts are blocked by extension CSP)
 - **lorebook-studio.html + lorebook-studio.js** — standalone tabbed tool page (Merge / Wrap All Triggers / Wrap a Snippet / Remove Wrapping / Format Checker), opened from Creator Tools → Tool Pages. Reuses help.js for theme toggle. Logic lives in **lorebook-studio.js** (external file — extension-page CSP blocks inline `<script>`; an inline block here is exactly why only the first tab worked in an earlier build). Wrap/merge behaviors ported verbatim from the original standalone tools (Merger, Cascade Destroyer, Cascade Buster, Recascadanator). Format Checker validates a pasted lorebook against DreamJourney's required shape (top-level + per-entry fields, every entry must have ≥1 `keyText` trigger) and lists issues by entry name.
 - **creator-tools-help.html** — plain-language explainer for the in-extension Creator tools (Load Lorebook, Message Tester, Active Chat Scanner, Active Chat Panel) and Lorebook Workshop. Opened from the Creator Tools "? How to use" button. Reuses help.js.
@@ -112,6 +114,8 @@ Only applies to Nyx and Athena models. Defaulting it ON would confuse users on a
 
 ## Storage structure
 
+**NOTE:** keys keep the `djt:` prefix even after the Aster rename — renaming them would orphan every user's saved data. Don't change them.
+
 ```js
 // Per-session store (key: 'djt:{sessionId}')
 {
@@ -120,19 +124,23 @@ Only applies to Nyx and Athena models. Defaulting it ON would confuse users on a
   regenHistory: { versions: [], current: 0 },
   scratch: '',           // current unsent draft
   scratchHistory: [],    // last 5 sent messages (newest first)
-  countsSnapshot: { user: 0, bot: 0, total: 0 }
+  countsSnapshot: { user: 0, bot: 0, total: 0 },
+  quillPersona: ''       // per-chat "who Quill writes as" (max 500 chars)
 }
 
 // Global settings (key: 'djt:settings')
 {
-  theme: 'dark',
-  saveRegens: true,
-  stats: true,
-  nexus: true,
-  scratchpad: true,
-  autoRefresh: true,
-  deleteThinking: false,
-  panelPos: null   // {left, top} when dragged
+  theme: 'dark', skin: 'dreamjourney',
+  saveRegens: true, stats: true, nexus: true,
+  scratchpad: true, autoRefresh: true, deleteThinking: false,
+  panelPos: null, panelSize: null, activeTab: 'chat',
+  cardCollapsed: {}, scanActive: false, lorebookLibrary: [],
+  hidden: {},            // section-id -> true when hidden from the panel (Settings window)
+  quill: {               // Quill connection (deep-merged on load)
+    enabled: false, ack: false, backend: 'ollama',
+    ollamaUrl, ollamaModel, lmstudioUrl, lmstudioModel,
+    koboldUrl, openaiBaseUrl, openaiModel, apiKey
+  }
 }
 ```
 
@@ -142,9 +150,9 @@ Only applies to Nyx and Athena models. Defaulting it ON would confuse users on a
 
 - **Two tabs**: Chat Tools / Creator Tools. Active tab saved in `settings.activeTab`.
 - **Collapsible cards**: click the card header to collapse/expand. State saved in `settings.cardCollapsed` (object keyed by card key). CSS hides `.djt-card-body` when `.djt-card-collapsed` is on the card.
-- **Card keys**: `stats`, `regen`, `scratch`, `features` (Chat Tools); `bottools`, `lorebook`, `toolpages` (Creator Tools).
+- **Card keys**: `stats`, `regen`, `scratch`, `features`, `quillchat` (Chat Tools); `bottools`, `lorebook`, `toolpages`, `quillcreator`, `quillimport` (Creator Tools).
 - **3 download buttons**: (1) Scroll to first message — runs pulse scroll with verification modal confirming first message loaded; sets `hasScrolledToTop = true` only if user confirms; (2) Download chat — shows "Is this the first message?" modal with the loaded message, user must confirm before download; (3) Back to bottom — `scrollTop = scrollHeight`. `hasScrolledToTop` resets on `deactivate()`.
-- **Creator Tools tab**: Bot Tools (export/import — placeholder), Lorebook Tools (Load Lorebook, Message Tester, Active Chat Scanner, + inline Active Chat Panel card), Tool Pages (link to lorebook-studio.html). Tab always visible regardless of URL; URL-gating to `/app/create/bot/` deferred.
+- **Creator Tools tab**: Bot Tools (export/import — IMPLEMENTED, see "Bot export / import"), Lorebook Tools (Load Lorebook, Message Tester, Active Chat Scanner, + inline Active Chat Panel card), Tool Pages (link to lorebook-studio.html / "Lorebook Workshop"), and the two Quill cards (Character Lens, Import a character). Tab always visible regardless of URL.
 - **Active Chat Panel**: Inline card within Lorebook Tools, toggled by "Active Chat Panel" button (`toggleActiveChatPanel`). Analyzes the last 4 messages combined and shows summary badges, a 1500-token bar, and per-entry rows (with direct/cascade "via" detail). Refreshes on new messages (500ms debounce via `panelDebounce`) plus a 30s fallback (`panelUpdateTo`). A "Full details" button pops out the Message Tester pre-filled with the recent text. Keeps users in the panel instead of floating/external modals.
 - **Pinned-entry budget note**: lives on the creator-tools-help page (intro `<p class="intro">`), not in the panel — keeps the panel uncluttered.
 - **Panel width**: 240px (up from 220px to accommodate tab labels).
@@ -241,12 +249,30 @@ Extension pages (help.html etc.) run under MV3 CSP. This means:
 - **Expand pushing panel off-screen** — fixed with `clampPanelIntoView()` after expand.
 - **Panel resizing** — added `#djt-resize` handle (`initResize`), persisted in `settings.panelSize`.
 
-## Known issues (defer to V3)
+## Quill (optional local-LLM / API assistant) — added in Aster
 
-- **Use button feedback**: Lorebook library "Use" button shows no visual feedback during load. Could add disabled state or checkmark animation.
+Quill connects the toolkit to a model the **user** supplies (local or API). The extension has no AI of its own. Network always goes through **background.js** (see Architecture).
 
-## V3 plans (next)
+- **Settings window (popup)** configures it: enable, backend (`ollama`/`lmstudio`/`kobold`/`openai`/`api`), per-backend URL+model, optional API key. Gated behind an "I understand" checkbox (`quill.ack`) + a link to `quill-guide.html`. "Test connection" pings `quill.test`; non-localhost API hosts trigger an `optional_host_permissions` request on the user gesture.
+- **Chat tab** (`runQuillImprove`, `runQuillSummarize`): improve-my-message (strength 1-5, tone, length, 500-char custom + presets, per-session `quillPersona`), and summarize (5/10/15/20 or "from start" behind a confirm). Reads the composer textarea + `lastBot()` for context.
+- **Creator tab — Character Lens** (`runQuillReview`): reads the bot files via `bridgeRequest('export')` and gives an analytical review of a creator's stated concern. System prompt forbids user-bias agreement and forbids rewriting the bot.
+- **Creator tab — Import a character** (`runQuillImport`): parses a SillyTavern card (PNG `tEXt`/`iTXt` `chara`/`ccv3` chunk → base64 JSON via `extractPngTextChunks`/`decodeCharaText`) or `.json`/`.txt`, maps known card fields, asks Quill (JSON mode) to reorganize into the DJ template, then offers Download `.json` (via `botEnvelope`) or Apply-to-bot-page (`bridgeRequest('import')`).
+- All Quill system prompts live in content.js (`quillImproveSystem`, `quillSummarizeSystem`, `quillReviewSystem`, `quillImportSystem`). `quillChat(system, user, opts)` is the shared call; `opts.json` sets Ollama `format:json` / OpenAI `response_format`.
 
-- Fill in remaining Creator Tools features (Bot Export/Import)
-- Consider live trigger highlighting directly on the chat DOM (currently the tester highlights within its own overlay only)
+## Hide/show panel sections (Settings window)
+
+`settings.hidden[key]` hides a section from the on-page panel. Honored by `applyVisibility()` in content.js (a section shows only if its feature toggle is on AND it isn't hidden), and can hide either tab (`tab:chat`/`tab:creator`, never both). The popup's `VIS_SECTIONS` mirrors content.js's `HIDEABLE` registry. Saved on the Settings "Save" button; applied live via `chrome.storage.onChanged`.
+
+## Mobile
+
+Same codebase, loaded on **Kiwi Browser or Lemur Browser** (Chromium for Android, from a zip). Touch drag/resize already built in. On mobile, **Quill only works with an API backend** (local servers need a computer). Packaged in `../dist/Aster-Mobile.zip`.
+
+## Open / known issues (NOT yet fixed)
+
+- **Reroll / greeting-as-option + intermittent Rerolls counter:** DJ renders each message as two same-id nodes (2nd lacks the avatar) and rerolling appends a new-id node instead of replacing in place, so `findRegenTarget()` can read the old (unchanged) reply → duplicate-guard skips capture. Candidate fix: harden `isBot`/`getMessages` against duplicate nodes + make regen capture robust to the new-id behavior. Not reproduced fully last attempt.
+- **Use button feedback**: Lorebook library "Use" button shows no visual feedback during load.
+
+## Release state
+
+First release shipped as **Aster** (was Sunny's DJ Toolkit V1.2 → V2.1). Repo: github.com/Sunflower-Seedss/Aster (private). Packaged zips in `../dist/`. See `../README.md` and the Downloads `Aster-Next-Session-Prompt.md` for the full handoff.
 
