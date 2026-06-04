@@ -23,7 +23,9 @@ A Chromium extension (Manifest V3) that injects a floating panel into DreamJourn
 - **dj-bridge.js** — MAIN-world helper injected on bot create/edit pages. Reaches React / react-hook-form to read & write the bot. See "Bot export / import" below.
 - **manifest.json** — MV3, matches both `dreamjourneyai.com/*` and `www.dreamjourneyai.com/*`. Name "Aster", version 2.1. `dj-bridge.js` is a `web_accessible_resource`.
 
-DreamJourney is a **Next.js SPA**. Content scripts only inject on real page loads. Route changes are detected by patching `history.pushState/replaceState` + popstate + 500ms polling. The lifecycle has two modes: `activate(sessionId)` for `/app/session/*` (chat panel) and `activateBotMode()` for `/app/create/bot/*` (panel on Creator tab, no chat wiring). `deactivate()` tears either down. `onRouteChange()` routes between them; `botMode` flag distinguishes.
+DreamJourney is a **Next.js SPA**. Content scripts only inject on real page loads. Route changes are detected by patching `history.pushState/replaceState` + popstate + 500ms polling. The lifecycle has **three modes**: `activate(sessionId)` for `/app/session/*` (full chat panel), `activateBotMode()` for `/app/create/bot/*` (panel on Creator tab, no chat wiring), and `activateGeneric()` for **any other DreamJourney page** (present but inert panel — no chat/bot wiring, no observers/intervals). `deactivate()` tears any of them down. `onRouteChange()` routes between them; the `botMode` / `genericMode` flags distinguish, and it skips a rebuild when staying within the same generic page-type.
+
+**Collapsed by default:** the panel starts in its smallest (collapsed bubble) form everywhere — `settings.panelCollapsed` defaults `true`, is applied in `buildPanel`, and is persisted on collapse/expand so it remembers the user's choice across navigations.
 
 ---
 

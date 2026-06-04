@@ -16,6 +16,8 @@
     theme: 'dark', saveRegens: true, stats: true, nexus: true,
     scratchpad: true, autoRefresh: true, deleteThinking: false,
     panelPos: null, panelSize: null, activeTab: 'chat', cardCollapsed: {}, scanActive: false, lorebookLibrary: [], skin: 'dreamjourney',
+    panelCollapsed: true,   // start collapsed (smallest form) by default; remembers the user's last choice
+
     // Visibility: map of section-id -> true when the user has hidden it from the
     // pop-out panel via the Settings Window. Absent/false = visible. Honored in Stage 2.
     hidden: {},
@@ -1983,12 +1985,13 @@
       const panel = document.getElementById('djt-panel');
       panel.classList.add('djt-collapsed');
       settings.panelPos = { left: panel.style.left || '', top: panel.style.top || '' };
-      saveSettings();
+      settings.panelCollapsed = true; saveSettings();
     });
     // Belt-and-suspenders expand for mobile
     p.addEventListener('click', () => {
       if (p.classList.contains('djt-collapsed')) {
         p.classList.remove('djt-collapsed');
+        settings.panelCollapsed = false; saveSettings();
         const h = document.getElementById('djt-head'); if (h) h.style.cursor = 'grab';
         requestAnimationFrame(() => clampPanelIntoView(p));
       }
@@ -2086,6 +2089,8 @@
       p.style.top  = settings.panelPos.top;
       requestAnimationFrame(() => clampPanelIntoView(p));
     }
+    // Start collapsed (smallest form) by default; remembers the user's last choice.
+    if (settings.panelCollapsed) p.classList.add('djt-collapsed');
   }
 
   // ---- TABS --------------------------------------------------
@@ -2177,6 +2182,7 @@
   let botAutosaveTimer = null;
   let botBackupMeta = null; // {ts, botId}
   let botMode = false;
+  let genericMode = false;   // panel present on a non-session/non-bot DJ page
 
   function injectBotBridge() {
     if (bridgeInjected) return;
@@ -2381,7 +2387,7 @@
 
   // ---- LIFECYCLE --------------------------------------------
   async function activate(sid) {
-    currentSessionId=sid; active=true; hasScrolledToTop=false;
+    currentSessionId=sid; active=true; botMode=false; genericMode=false; hasScrolledToTop=false;
     await loadAll();
     const c=await waitFor(()=>document.querySelector('.scrollchatmessages'),20000,250);
     if(!active||currentSessionId!==sid) return; if(!c) return;
@@ -2403,7 +2409,7 @@
   }
   // Bot create/edit pages: build the panel (Creator tab) without chat wiring.
   async function activateBotMode() {
-    active=true; botMode=true; currentSessionId=null;
+    active=true; botMode=true; genericMode=false; currentSessionId=null;
     await loadAll();
     if(!isBotPage()) return;
     await waitFor(()=>document.querySelector('input[name="name"]')||document.querySelector('main'),15000,250);
@@ -2412,8 +2418,17 @@
     switchTab('creator', true); applyAllCardCollapses();
     injectBotBridge(); startBotAutosave();
   }
+  // Any other DreamJourney page: a present-but-collapsed panel, no chat/bot wiring.
+  async function activateGeneric() {
+    active=true; botMode=false; genericMode=true; currentSessionId=null;
+    await loadAll();
+    if(isSessionUrl()||isBotPage()) return;   // a real page took over while we awaited
+    buildPanel(); setTheme(settings.theme); setSkin(settings.skin); syncToggleStates(); applyVisibility();
+    switchTab(settings.activeTab||'chat', true); applyAllCardCollapses();
+    refreshQuillUI();
+  }
   function deactivate() {
-    active=false; botMode=false; stopBotAutosave();
+    active=false; botMode=false; genericMode=false; stopBotAutosave();
     hasScrolledToTop=false;
     if(containerObserver){containerObserver.disconnect();containerObserver=null;}
     observedContainer=null;
@@ -2428,9 +2443,12 @@
     expectingReply=false;regenPending=false;regenTargetIdx=-1;regenAnchorUserId=null;previewIndex=null;currentSessionId=null;
   }
   function onRouteChange(){
-    if(isSessionUrl()){const sid=sessionIdFromUrl();if(sid&&sid===currentSessionId&&active&&!botMode)return;if(active)deactivate();activate(sid);return;}
+    if(isSessionUrl()){const sid=sessionIdFromUrl();if(sid&&sid===currentSessionId&&active&&!botMode&&!genericMode)return;if(active)deactivate();activate(sid);return;}
     if(isBotPage()){if(active&&botMode){updateBotStatus('ok');return;}if(active)deactivate();activateBotMode();return;}
+    // Any other DreamJourney page: keep a present-but-collapsed generic panel.
+    if(active&&genericMode) return;        // already generic — don't rebuild on same-type nav
     if(active)deactivate();
+    activateGeneric();
   }
   function setupRouteWatcher(){
     const fire=()=>{try{onRouteChange();}catch(e){}};
