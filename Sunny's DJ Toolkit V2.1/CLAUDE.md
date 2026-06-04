@@ -68,10 +68,13 @@ Page has no <h1>.     Document title is generic. Character name is ONLY in the a
 
 ## Key decisions and why
 
+> ### 🔒 HARD-LOCKED: pulse-based scroll-to-top
+> **Do NOT modify `scrollToTop`, `doScrollToTop`, the 900ms pulse timing, the `stable >= 6 && firstIsBot` termination, OR `isBot` (the stop condition calls it).** This was tuned to a fine art against DreamJourney's lazy-loader and is extremely sensitive. Changing `isBot` — even for an unrelated feature like the stats counter — changes the scroll stop condition and has caused regressions. If you need a different message-type check elsewhere, write a SEPARATE helper; never repurpose `isBot` or the scroll functions. Every chat opens with a bot message, so `firstIsBot` is the correct "reached the true top" signal. Touch this only with an explicit request to change scrolling itself, and re-test on a 300+ message chat.
+
 **Pulse-based scroll (scrollToTop):**
 DreamJourney uses an IntersectionObserver on a sentinel element at the top of `.scrollchatmessages` to lazy-load older message batches. Setting `scrollTop = 0` every 900ms triggers each batch. CRITICAL: do NOT add scroll event listeners that fight back — this was tried and it blocked the IntersectionObserver from firing, stopping loads at ~150 messages. The current approach (pulse every 900ms, let DJ bounce naturally between pulses) reliably loads all messages on a 371-message chat.
 
-Termination: `stable >= 6 && firstIsBot` — height hasn't changed for 5.4s AND the first message in the DOM is a bot message. This double-check prevents stopping during a brief network stall mid-load.
+Termination: `stable >= 6 && firstIsBot` — height hasn't changed for 5.4s AND the first message in the DOM is a bot message (`isBot`, via the `@shadcn` avatar). Chats always open with a bot message, so this reliably means the true top. This double-check prevents stopping during a brief network stall mid-load.
 
 **Scroll verification modal (CRITICAL):**
 After scrolling completes, `doScrollToTop()` displays a `confirmVerifyFirstModal()` showing the first loaded message and asking "Is this the first message?" with hint text "If not, please check the help section." This is essential because: (1) the scroll termination check can occasionally stop on a user message if the chat is structured unexpectedly; (2) the user MUST verify they're at the actual top before downloading, otherwise the export will be incomplete; (3) the modal gives users actionable guidance (check help) if they're stuck. **Removing this modal breaks functionality** — users lose the ability to confirm they reached the top and cannot recover if the scroll stops early. The 900ms pulse timing + verification modal together ensure reliable scroll-to-top behavior.
