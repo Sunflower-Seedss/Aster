@@ -1722,7 +1722,7 @@
           `<div class="djt-card" id="djt-toolpages-card">` +
             cardH('Tool Pages', 'toolpages') +
             `<div class="djt-card-body">` +
-              `<a class="djt-tool-link" href="${studioUrl}" target="_blank">Lorebook Studio ↗</a>` +
+              `<a class="djt-tool-link" href="${studioUrl}" target="_blank">Lorebook Workshop ↗</a>` +
               `<div class="djt-tool-note">Merge, wrap &amp; unwrap lorebooks, all in one page.</div>` +
             `</div>` +
           `</div>` +

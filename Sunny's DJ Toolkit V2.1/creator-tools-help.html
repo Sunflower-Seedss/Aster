@@ -47,7 +47,8 @@
 
   main { max-width:660px; margin:0 auto; padding:28px 20px 0; }
   .intro { font-size:14px; color:var(--soft); margin-bottom:8px; line-height:1.7; }
-  .section-label { font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--muted); margin:24px 0 10px; padding-left:2px; }
+  .section-label { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.12em; color:var(--accent); margin:24px 0 10px; padding-left:2px; text-shadow:0 1px 5px rgba(0,0,0,0.6); }
+  [data-theme="light"] .section-label { text-shadow:none; }
 
   .card { background:rgba(13,12,20,0.82); border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:18px 20px; margin-bottom:9px; backdrop-filter:blur(4px); }
   [data-theme="light"] .card { background:rgba(246,242,255,0.86); border-color:rgba(99,102,241,0.16); }
@@ -131,7 +132,8 @@
 <nav class="page-nav">
   <a href="help.html">Chat Tools help</a>
   <span class="page-nav-here">Creator Tools help</span>
-  <a href="lorebook-studio.html">Lorebook Studio</a>
+  <a href="lorebook-studio.html">Lorebook Workshop</a>
+  <a href="quill-guide.html">Quill guide</a>
 </nav>
 
 <main>
@@ -212,14 +214,14 @@
         <li>It refreshes on its own whenever a new message is sent.</li>
         <li>Need the complete breakdown? Click <strong>Full details</strong> to pop out the same rich view the Message Tester gives.</li>
       </ol>
-      <div class="tip"><span class="tip-icon">💡</span><span>If the token bar turns red, you're over budget and some entries are being cut. Time to wrap a few triggers in Lorebook Studio.</span></div>
+      <div class="tip"><span class="tip-icon">💡</span><span>If the token bar turns red, you're over budget and some entries are being cut. Time to wrap a few triggers in Lorebook Workshop.</span></div>
     </div>
   </div>
 
   <div class="section-label">Tool page</div>
 
   <div class="card">
-    <div class="card-head"><div class="card-icon">🛠️</div><div class="card-title">Lorebook Studio</div></div>
+    <div class="card-head"><div class="card-icon">🛠️</div><div class="card-title">Lorebook Workshop</div></div>
     <div class="card-body">
       <p>A separate page with tools that actually <strong>change or check a lorebook file</strong> for you. Each tab has its own step-by-step guide built in. In short:</p>
       <ol class="steps">

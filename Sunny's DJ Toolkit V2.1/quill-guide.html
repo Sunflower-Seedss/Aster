@@ -64,9 +64,11 @@
   [data-theme="light"] .page-nav-here { color:#fff; }
 
   main { max-width: 660px; margin: 0 auto; padding: 28px 20px 0; }
-  .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 24px 0 10px; padding-left: 2px; opacity: 0.9; }
-  .lead { font-size: 13px; color: var(--soft); margin: 0 2px 14px; line-height: 1.7; }
-  .lead strong { color: var(--text); }
+  .section-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); margin: 24px 0 10px; padding-left: 2px; text-shadow: 0 1px 5px rgba(0,0,0,0.6); }
+  .lead { font-size: 13.5px; color: var(--text); margin: 0 2px 14px; line-height: 1.7; text-shadow: 0 1px 5px rgba(0,0,0,0.55); }
+  .lead strong { color: var(--text); font-weight: 800; }
+  [data-theme="light"] .section-label, [data-theme="light"] .lead { text-shadow: none; }
+  [data-theme="light"] .lead { color: var(--soft); }
 
   .card {
     background: rgba(13,12,20,0.82);
@@ -152,7 +154,7 @@
   <span class="page-nav-here">Quill guide</span>
   <a href="help.html">Chat Tools help</a>
   <a href="creator-tools-help.html">Creator Tools help</a>
-  <a href="lorebook-studio.html">Lorebook Studio</a>
+  <a href="lorebook-studio.html">Lorebook Workshop</a>
 </nav>
 
 <main>
