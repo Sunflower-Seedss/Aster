@@ -1401,7 +1401,6 @@
                 `<button class="djt-theme-opt" data-skin="sunflowers">Sunflowers</button>` +
               `</div>` +
             `</div>` +
-            `<button id="djt-data-btn" class="djt-mini-btn full" style="margin-bottom:6px">🗄️ Manage saved data</button>` +
             `<button id="djt-surprise-btn" class="djt-mini-btn full djt-surprise">&#127800; Surprise me!</button>` +
           `</div>` +
         `</div>` +
@@ -1494,7 +1493,6 @@
       b.style.display=o?'':'none'; this.textContent=(o?'▾':'▸')+' Advanced';
     });
     document.getElementById('djt-surprise-btn').addEventListener('click', bloomBlossoms);
-    document.getElementById('djt-data-btn').addEventListener('click', openDataManager);
 
     // Theme (skin) selector
     [...document.querySelectorAll('.djt-theme-opt')].forEach(btn => {
@@ -1775,124 +1773,6 @@
     if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
     return (n / 1048576).toFixed(2) + ' MB';
   }
-  function sizeOf(v) { try { return new Blob([typeof v === 'string' ? v : JSON.stringify(v)]).size; } catch (e) { return 0; } }
-
-  function openDataManager() {
-    if (document.getElementById('djt-lb-overlay')) document.getElementById('djt-lb-overlay').remove();
-    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
-    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
-    ov.innerHTML =
-      `<div class="djt-lb-modal">` +
-        `<div class="djt-lb-head"><span class="djt-lb-title">🗄️ Manage saved data</span>` +
-          `<button class="djt-lb-x" id="djt-dm-x" title="Close">✕</button></div>` +
-        `<div class="djt-lb-body" id="djt-dm-body"><div class="djt-lb-msg" style="display:block">Loading…</div></div>` +
-      `</div>`;
-    document.body.appendChild(ov);
-    const close = () => ov.remove();
-    document.getElementById('djt-dm-x').addEventListener('click', close);
-    ov.addEventListener('click', e => { if (e.target === ov) close(); });
-    // Delegated actions
-    document.getElementById('djt-dm-body').addEventListener('click', onDataManagerClick);
-    renderDataManager();
-  }
-
-  function onDataManagerClick(e) {
-    const b = e.target.closest('[data-act]'); if (!b) return;
-    const act = b.dataset.act;
-    if (act === 'delKey') {
-      try { chrome.storage.local.remove(b.dataset.key, renderDataManager); } catch (e) { renderDataManager(); }
-    } else if (act === 'clearKeys') {
-      const keys = JSON.parse(b.dataset.keys || '[]');
-      if (!keys.length) return;
-      if (!confirm('Delete all ' + keys.length + ' ' + b.dataset.label + '? This cannot be undone.')) return;
-      try { chrome.storage.local.remove(keys, renderDataManager); } catch (e) { renderDataManager(); }
-    } else if (act === 'delLib') {
-      const idx = +b.dataset.idx;
-      loadLorebookLibrary(lib => {
-        lib.splice(idx, 1);
-        try { chrome.storage.local.set({ 'djt:lb-library': lib }, renderDataManager); } catch (e) { renderDataManager(); }
-      });
-    } else if (act === 'clearLib') {
-      if (!confirm('Delete your entire lorebook library? This cannot be undone.')) return;
-      try { chrome.storage.local.set({ 'djt:lb-library': [] }, renderDataManager); } catch (e) { renderDataManager(); }
-    } else if (act === 'restoreBackup') {
-      const key = b.dataset.key;
-      chrome.storage.local.get(key, async d => {
-        const rec = d && d[key]; const bot = rec && rec.bot;
-        if (!bot) { toast('That backup is empty.'); return; }
-        if (!confirm('Populate the bot form that is currently open with this backup? Review it before submitting.')) return;
-        // Close the data manager first so botGuard's Legacy prompt (which reuses
-        // #djt-lb-overlay) can show if we're not on a usable Legacy bot form.
-        const ov = document.getElementById('djt-lb-overlay'); if (ov) ov.remove();
-        const det = await botGuard(); if (!det) return; // guards bot-page + Legacy, toasts/prompts otherwise
-        const res = await bridgeRequest('import', bot);
-        if (res && res.applied) toast('Restored ' + res.applied.length + ' fields into the form.');
-        else toast('Restore failed: ' + (res && res.error || 'unknown'));
-      });
-    } else if (act === 'resetSettings') {
-      if (!confirm('Reset all toolkit settings to defaults? Saved data is kept.')) return;
-      settings = Object.assign({}, DEFAULT_SETTINGS);
-      try { chrome.storage.local.set({ [SETTINGS_KEY]: settings }, () => { renderDataManager(); setTheme(settings.theme); setSkin(settings.skin); }); } catch (e) { renderDataManager(); }
-    }
-  }
-
-  function dmSection(title, totalSize, clearBtn, rowsHtml) {
-    return `<div class="djt-dm-sec">` +
-      `<div class="djt-dm-sechead"><span>${title}</span>` +
-        `<span class="djt-dm-secright"><span class="djt-dm-size">${fmtBytes(totalSize)}</span>${clearBtn}</span></div>` +
-      (rowsHtml || `<div class="djt-lb-empty">Nothing saved.</div>`) +
-    `</div>`;
-  }
-
-  function renderDataManager() {
-    const body = document.getElementById('djt-dm-body'); if (!body) return;
-    let done = false;
-    const timeout = setTimeout(() => {
-      if (!done) { body.innerHTML = '<div class="djt-lb-msg err">Storage read timeout. Try refreshing.</div>'; done = true; }
-    }, 3000);
-    try {
-      chrome.storage.local.get(null, all => {
-        clearTimeout(timeout); if (done) return; done = true;
-      all = all || {};
-      const sessions = [], backups = [];
-      let lib = [], activeLB = null, settingsSize = 0, total = 0;
-      Object.keys(all).forEach(k => {
-        const sz = sizeOf(all[k]); total += sz;
-        if (k === SETTINGS_KEY) settingsSize = sz;
-        else if (k === LOREBOOK_KEY) activeLB = { key: k, size: sz, name: (() => { try { return JSON.parse(all[k]).name || 'Active lorebook'; } catch (e) { return 'Active lorebook'; } })() };
-        else if (k === 'djt:lb-library') lib = (all[k] || []).map((it, i) => ({ name: it.name, date: it.dateAdded, i, size: sizeOf(it) }));
-        else if (k.indexOf('djt:botbackup:') === 0) backups.push({ key: k, name: (all[k] && all[k].bot && all[k].bot.name) || '(unnamed bot)', ts: all[k] && all[k].ts, size: sz });
-        else if (k.indexOf('djt:') === 0) { const s = all[k] || {}; sessions.push({ key: k, id: k.slice(4), rerolls: s.rerolls || 0, nexus: s.sinceNexus || 0, size: sz }); }
-      });
-      const clearBtn = (keys, label) => keys.length ? `<button class="djt-dm-clear" data-act="clearKeys" data-label="${label}" data-keys='${escHTML(JSON.stringify(keys))}'>Clear all</button>` : '';
-      const row = (main, meta, act, data) => `<div class="djt-dm-row"><div class="djt-dm-rmain"><div class="djt-dm-rname">${main}</div><div class="djt-dm-rmeta">${meta}</div></div><button class="djt-dm-del" data-act="${act}" ${data} title="Delete">×</button></div>`;
-
-      // Sessions
-      const sessRows = sessions.map(s => row(escHTML(s.id.slice(0, 8)) + '…', s.rerolls + ' reroll' + (s.rerolls === 1 ? '' : 's') + ' · ' + fmtBytes(s.size), 'delKey', `data-key="${escHTML(s.key)}"`)).join('');
-      // Bot backups (with Restore + delete)
-      const backRows = backups.sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(bk =>
-        `<div class="djt-dm-row"><div class="djt-dm-rmain">` +
-          `<div class="djt-dm-rname">${escHTML(bk.name)}</div>` +
-          `<div class="djt-dm-rmeta">${(bk.ts ? new Date(bk.ts).toLocaleString() : '')} · ${fmtBytes(bk.size)}</div>` +
-        `</div>` +
-        `<button class="djt-dm-restore" data-act="restoreBackup" data-key="${escHTML(bk.key)}" title="Populate the open bot form from this backup">Restore</button>` +
-        `<button class="djt-dm-del" data-act="delKey" data-key="${escHTML(bk.key)}" title="Delete">×</button>` +
-        `</div>`).join('');
-      // Lorebook library
-      const libRows = lib.map(l => row(escHTML(l.name || '(unnamed)'), (l.date ? new Date(l.date).toLocaleDateString() : '') + ' · ' + fmtBytes(l.size), 'delLib', `data-idx="${l.i}"`)).join('');
-      // Active lorebook
-      const activeRows = activeLB ? row(escHTML(activeLB.name), fmtBytes(activeLB.size), 'delKey', `data-key="${escHTML(activeLB.key)}"`) : '';
-
-      let html = `<div class="djt-dm-total">Total stored: <b>${fmtBytes(total)}</b></div>`;
-      html += dmSection('Session data <span class="djt-dm-ct">' + sessions.length + '</span>', sessions.reduce((a, s) => a + s.size, 0), clearBtn(sessions.map(s => s.key), 'sessions'), sessRows);
-      html += dmSection('Bot backups <span class="djt-dm-ct">' + backups.length + '</span>', backups.reduce((a, s) => a + s.size, 0), clearBtn(backups.map(s => s.key), 'bot backups'), backRows);
-      html += dmSection('Lorebook library <span class="djt-dm-ct">' + lib.length + '</span>', lib.reduce((a, s) => a + s.size, 0), lib.length ? `<button class="djt-dm-clear" data-act="clearLib">Clear all</button>` : '', libRows);
-      html += dmSection('Active lorebook', activeLB ? activeLB.size : 0, '', activeRows);
-      html += dmSection('Toolkit settings', settingsSize, `<button class="djt-dm-clear" data-act="resetSettings">Reset</button>`, `<div class="djt-dm-rmeta" style="padding:6px 2px">Your preferences (theme, toggles, panel position). Resetting keeps all saved data above.</div>`);
-      body.innerHTML = html;
-      });
-    } catch (e) { body.innerHTML = '<div class="djt-lb-msg err">Error reading storage.</div>'; }
-  }
 
   // ---- LIFECYCLE --------------------------------------------
   async function activate(sid) {
@@ -1904,10 +1784,6 @@
     switchTab(settings.activeTab); applyAllCardCollapses();
     startContainerObserver(); hookScratchpad();
     refreshStatsUI(); refreshRegenPanel(); refreshThinkingButtons(); maybeOfferRestore(); maybeStartScanner();
-    // On a hard refresh, the page may finish painting the message nodes after
-    // activate() runs, so recount once more after a brief delay to catch a
-    // premature early count. The observer will keep it fresh after this.
-    setTimeout(() => { if (active && currentSessionId === sid) refreshStatsUI(); }, 1800);
     if(!scratchpadInterval) scratchpadInterval=setInterval(()=>{ if(active){hookScratchpad();refreshThinkingButtons();if(scanActive)runChatScan();} },3000);
   }
   // Bot create/edit pages: build the panel (Creator tab) without chat wiring.
