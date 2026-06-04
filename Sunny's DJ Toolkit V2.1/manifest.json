@@ -8,8 +8,17 @@
   ],
   "host_permissions": [
     "https://www.dreamjourneyai.com/*",
-    "https://dreamjourneyai.com/*"
+    "https://dreamjourneyai.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [

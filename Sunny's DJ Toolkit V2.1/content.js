@@ -15,7 +15,25 @@
   const DEFAULT_SETTINGS = {
     theme: 'dark', saveRegens: true, stats: true, nexus: true,
     scratchpad: true, autoRefresh: true, deleteThinking: false,
-    panelPos: null, panelSize: null, activeTab: 'chat', cardCollapsed: {}, scanActive: false, lorebookLibrary: [], skin: 'dreamjourney'
+    panelPos: null, panelSize: null, activeTab: 'chat', cardCollapsed: {}, scanActive: false, lorebookLibrary: [], skin: 'dreamjourney',
+    // Visibility: map of section-id -> true when the user has hidden it from the
+    // pop-out panel via the Settings Window. Absent/false = visible. Honored in Stage 2.
+    hidden: {},
+    // Quill (local-LLM / optional API helper). Connection is configured in the
+    // Settings Window; the tool UI lives in the pop-out under Advanced.
+    // backend: 'ollama' | 'openai' | 'lmstudio' | 'kobold' | 'api'
+    quill: {
+      enabled: false,
+      backend: 'ollama',
+      ollamaUrl: 'http://localhost:11434',
+      ollamaModel: '',
+      lmstudioUrl: 'http://localhost:1234',
+      lmstudioModel: '',
+      koboldUrl: 'http://localhost:5001',
+      openaiBaseUrl: 'https://api.openai.com/v1',
+      openaiModel: 'gpt-4o-mini',
+      apiKey: ''            // user-entered, stored locally only
+    }
   };
   const DEFAULT_STORE = {
     rerolls: 0, sinceNexus: 0,
@@ -37,6 +55,9 @@
           store    = Object.assign({}, DEFAULT_STORE, (data && data[storeKey()]) || {});
           settings = Object.assign({}, DEFAULT_SETTINGS, (data && data[SETTINGS_KEY]) || {});
           if (!settings.cardCollapsed || typeof settings.cardCollapsed !== 'object') settings.cardCollapsed = {};
+          if (!settings.hidden || typeof settings.hidden !== 'object') settings.hidden = {};
+          // Deep-merge quill so new default keys survive an older stored partial.
+          settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, (settings.quill && typeof settings.quill === 'object') ? settings.quill : {});
           if (!store.regenHistory || !Array.isArray(store.regenHistory.versions))
             store.regenHistory = { versions: [], current: 0 };
           if (!Array.isArray(store.scratchHistory)) store.scratchHistory = [];
@@ -1847,6 +1868,21 @@
     const cm = document.querySelector('.djt-modal-overlay');
     if (cm) { const cancel = cm.querySelector('[data-v="cancel"]'); if (cancel) cancel.click(); else cm.remove(); }
   });
+
+  // Live-apply settings changed from the Settings Window popup (themes now;
+  // visibility/quill consumed in later stages). Only pull the fields the popup
+  // owns so we never clobber in-memory panelPos/size/collapse state.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes[SETTINGS_KEY]) return;
+      const nv = changes[SETTINGS_KEY].newValue; if (!nv) return;
+      if (typeof nv.skin === 'string') settings.skin = nv.skin;
+      if (typeof nv.theme === 'string') settings.theme = nv.theme;
+      if (nv.hidden && typeof nv.hidden === 'object') settings.hidden = nv.hidden;
+      if (nv.quill && typeof nv.quill === 'object') settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, nv.quill);
+      if (document.getElementById('djt-panel')) { setSkin(settings.skin); setTheme(settings.theme); }
+    });
+  } catch (e) {}
 
   setupDelegation(); setupRouteWatcher(); onRouteChange();
 })();
