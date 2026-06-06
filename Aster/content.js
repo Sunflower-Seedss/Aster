@@ -542,8 +542,51 @@
   }
 
   // ---- LOREBOOK TESTER (overlay) -----------------------------
-  const LOREBOOK_KEY = 'djt:lorebook';
+  // Four-slot lorebook system: bot1, bot2, bot3, persona
+  const LOREBOOKS_KEY = 'djt:lorebooks';
+  const LOREBOOK_KEY = 'djt:lorebook'; // legacy key for backwards compat migration
   let lbParsed = null;
+
+  // Load all 4 lorebooks and merge entries with origin tracking
+  function loadAllLorebooks(cb) {
+    try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+      const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+      const merged = {entries: [], slotMap: {}};
+      const slots = ['bot1', 'bot2', 'bot3', 'persona'];
+      slots.forEach(slot => {
+        if (data[slot]) {
+          try {
+            const lb = JSON.parse(data[slot]);
+            if (Array.isArray(lb.entries)) {
+              lb.entries.forEach(e => {
+                merged.entries.push(Object.assign({}, e, {origin: slot}));
+                merged.slotMap[e.name] = slot;
+              });
+            }
+          } catch (e) {}
+        }
+      });
+      cb(merged);
+    }); } catch (e) { cb({entries: [], slotMap: {}}); }
+  }
+
+  // Save a single lorebook slot
+  function saveLorebook(slot, json) {
+    try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+      const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+      data[slot] = json;
+      chrome.storage.local.set({[LOREBOOKS_KEY]: data});
+    }); } catch (e) {}
+  }
+
+  // Clear a single lorebook slot
+  function clearLorebook(slot) {
+    try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+      const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+      data[slot] = null;
+      chrome.storage.local.set({[LOREBOOKS_KEY]: data});
+    }); } catch (e) {}
+  }
 
   function escHTML(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -598,7 +641,7 @@
     const directMap = {};
     entries.forEach(e => { const h = lbDirectHits(message, e); if (h.length) directMap[e.name] = h; });
 
-    const cascadeMap = {}, activated = {}, visited = {};
+    const cascadeMap = {}, cascadeOriginMap = {}, activated = {}, visited = {};
     Object.keys(pinnedSet).forEach(n => { activated[n]=true; visited[n]=true; });
     Object.keys(directMap).forEach(n => { activated[n]=true; visited[n]=true; });
     const queue = Object.keys(activated).slice();
@@ -612,6 +655,7 @@
         if (hits.length) {
           visited[tgt.name]=true; activated[tgt.name]=true;
           (cascadeMap[tgt.name]=cascadeMap[tgt.name]||[]).push({source:srcName,keys:hits});
+          cascadeOriginMap[tgt.name] = tgt.origin; // Track which slot this entry came from
           queue.push(tgt.name);
         }
       });
@@ -633,7 +677,7 @@
     const hlRanges=[];
     Object.keys(directMap).forEach(name=>directMap[name].forEach(key=>lbFindMatches(message,key).forEach(m=>hlRanges.push(m))));
 
-    return { message, directMap, cascadeMap, pinnedSet, activatedList, included, cut, tokMap, totalToks:running, hlRanges };
+    return { message, directMap, cascadeMap, pinnedSet, activatedList, included, cut, tokMap, totalToks:running, hlRanges, cascadeOriginMap };
   }
 
   function lbBuildHighlight(text, ranges) {
@@ -685,14 +729,14 @@
     document.getElementById('djt-lb-close').addEventListener('click', close);
     ov.addEventListener('click', e => { if (e.target === ov) close(); });
 
-    // Load lorebook from storage
-    try { chrome.storage.local.get([LOREBOOK_KEY], d => {
-      if (d && d[LOREBOOK_KEY]) {
-        try { lbParsed = JSON.parse(d[LOREBOOK_KEY]); } catch(e) { toast('Error loading lorebook'); }
+    // Load all 4 lorebooks from storage and merge
+    loadAllLorebooks(merged => {
+      if (merged && merged.entries && merged.entries.length) {
+        lbParsed = {entries: merged.entries};
       } else {
         const nb = document.getElementById('djt-lb-nolb'); if (nb) nb.style.display = '';
       }
-    }); } catch(e){}
+    });
 
     document.getElementById('djt-lb-grab').addEventListener('click', () => {
       const lb = lastBot();
@@ -749,12 +793,17 @@
     let how='';
     if (entry.pinned) how='📌 Pinned, always loaded';
     else if (a.directMap[entry.name]) how='🎯 Direct, matched: <b>'+escHTML(a.directMap[entry.name].join(', '))+'</b>';
-    else if (a.cascadeMap[entry.name]) how=a.cascadeMap[entry.name].map(s=>'🔗 Cascade from <b>'+escHTML(s.source)+'</b> via <b>'+escHTML(s.keys.join(', '))+'</b>').join('<br>');
+    else if (a.cascadeMap[entry.name]) {
+      const slotName = a.cascadeOriginMap && a.cascadeOriginMap[entry.name] ? a.cascadeOriginMap[entry.name] : entry.origin || 'unknown';
+      const slotLabel = slotName === 'bot1' ? 'Bot 1' : slotName === 'bot2' ? 'Bot 2' : slotName === 'bot3' ? 'Bot 3' : 'Persona';
+      how=a.cascadeMap[entry.name].map(s=>'🔗 Cascade from <b>'+escHTML(s.source)+'</b> via <b>'+escHTML(s.keys.join(', '))+'</b>').join('<br>');
+    }
     const toks=a.tokMap[entry.name]||0;
     const meta=[]; if(entry.type)meta.push(entry.type); meta.push('weight '+(entry.weight!=null?entry.weight:5));
     if(entry.hidden)meta.push('hidden'); if(entry.pinned)meta.push('pinned');
+    const originBadge = entry.origin ? `<span style="color:var(--djt-muted);font-size:9px;font-weight:600;margin-left:6px">[${entry.origin==='bot1'?'Bot 1':entry.origin==='bot2'?'Bot 2':entry.origin==='bot3'?'Bot 3':'Persona'}]</span>` : '';
     row.innerHTML=
-      `<div><div class="djt-lb-ename">${escHTML(entry.name)}</div>`+
+      `<div><div class="djt-lb-ename">${escHTML(entry.name)}${originBadge}</div>`+
       `<div class="djt-lb-emeta">${meta.map(escHTML).join(' · ')}</div>`+
       (how?`<div class="djt-lb-ehow">${how}</div>`:'')+`</div>`+
       `<div class="djt-lb-etok">~${toks}<small>tok</small></div>`;
@@ -818,11 +867,13 @@
   function clearChatScan() { if (scanSupported()) CSS.highlights.delete(SCAN_HL); }
 
   function loadScanLorebook(cb) {
-    try { chrome.storage.local.get([LOREBOOK_KEY], d => {
-      let lb = null; const raw = d && d[LOREBOOK_KEY];
-      if (raw) { try { lb = JSON.parse(raw); } catch (e) {} }
-      cb(lb);
-    }); } catch (e) { cb(null); }
+    loadAllLorebooks(merged => {
+      if (merged && merged.entries && merged.entries.length) {
+        cb({entries: merged.entries});
+      } else {
+        cb(null);
+      }
+    });
   }
 
   function setScanner(on) {
@@ -890,25 +941,35 @@
     const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
     ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
     ov.innerHTML =
-      `<div class="djt-lb-modal">` +
+      `<div class="djt-lb-modal" style="max-width:700px">` +
         `<div class="djt-lb-head">` +
-          `<span class="djt-lb-title">📥 Load Lorebook</span>` +
+          `<span class="djt-lb-title">📥 Load Lorebooks (4 slots)</span>` +
           `<button id="djt-load-close" class="djt-lb-x" title="Close">✕</button>` +
         `</div>` +
         `<div class="djt-lb-body">` +
-          `<div class="djt-lb-step" style="display:flex;justify-content:space-between;align-items:center;gap:8px">` +
-            `<span>Your saved lorebooks</span>` +
-            `<button id="djt-lib-clear" class="djt-mini-btn ghost" style="padding:3px 10px;font-size:10px;display:none">Clear all</button>` +
+          `<div class="djt-lb-step">Active slots</div>` +
+          `<div id="djt-slots-container" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px"></div>` +
+          `<div class="djt-lb-step">Paste & load into slot</div>` +
+          `<div style="display:flex;gap:8px;margin-bottom:8px">` +
+            `<textarea id="djt-load-ta" class="djt-lb-ta mono" placeholder="Paste your lorebook JSON here..." style="flex:1;min-height:100px"></textarea>` +
+            `<select id="djt-load-slot" style="height:100%;padding:8px;border-radius:4px;border:1px solid var(--djt-border)">` +
+              `<option value="bot1">Bot 1</option>` +
+              `<option value="bot2">Bot 2</option>` +
+              `<option value="bot3">Bot 3</option>` +
+              `<option value="persona">Persona</option>` +
+            `</select>` +
           `</div>` +
-          `<div id="djt-lib-list" class="djt-lb-entries" style="margin-bottom:6px"></div>` +
-          `<div class="djt-lb-step" id="djt-lb-step2">Paste a new lorebook</div>` +
-          `<textarea id="djt-load-ta" class="djt-lb-ta mono" placeholder="Paste your lorebook JSON here..."></textarea>` +
           `<div class="djt-lb-row">` +
-            `<button id="djt-load-paste-btn" class="djt-mini-btn primary">Load</button>` +
+            `<button id="djt-load-paste-btn" class="djt-mini-btn primary">Load into slot</button>` +
             `<button id="djt-load-save-btn" class="djt-mini-btn">Save &amp; Load</button>` +
             `<button id="djt-load-cancel-btn" class="djt-mini-btn">Cancel</button>` +
           `</div>` +
           `<div id="djt-load-status" class="djt-lb-msg"></div>` +
+          `<div class="djt-lb-step" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:16px">` +
+            `<span>Library</span>` +
+            `<button id="djt-lib-clear" class="djt-mini-btn ghost" style="padding:3px 10px;font-size:10px;display:none">Clear all</button>` +
+          `</div>` +
+          `<div id="djt-lib-list" class="djt-lb-entries" style="margin-bottom:6px"></div>` +
         `</div>` +
       `</div>`;
     document.body.appendChild(ov);
@@ -918,9 +979,50 @@
     document.getElementById('djt-load-cancel-btn').addEventListener('click', close);
     ov.addEventListener('click', e => { if (e.target === ov) close(); });
 
+    // Render 4 slot sections
+    const renderSlots = () => {
+      loadAllLorebooks(merged => {
+        try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+          const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+          const slotDefs = [
+            {key: 'bot1', label: 'Bot Lorebook 1'},
+            {key: 'bot2', label: 'Bot Lorebook 2'},
+            {key: 'bot3', label: 'Bot Lorebook 3'},
+            {key: 'persona', label: 'Persona Lorebook'}
+          ];
+          let html = '';
+          slotDefs.forEach(slot => {
+            const json = data[slot.key];
+            let display = '(empty)';
+            if (json) {
+              try {
+                const lb = JSON.parse(json);
+                const name = (lb.name && lb.name.trim()) || 'Unnamed';
+                const count = (lb.entries && lb.entries.length) || 0;
+                display = `${escHTML(name)} (${count} entries)`;
+              } catch (e) { display = '(invalid)'; }
+            }
+            html += `
+              <div style="border:1px solid var(--djt-border);border-radius:6px;padding:10px">
+                <div style="font-weight:600;margin-bottom:6px;font-size:11px">${escHTML(slot.label)}</div>
+                <div style="font-size:10px;color:var(--djt-muted);margin-bottom:8px">Currently loaded: <b>${display}</b></div>
+                <div style="display:flex;gap:4px;flex-wrap:wrap">
+                  <button onclick="djt_useFromLib_slot('${slot.key}')" class="djt-mini-btn primary" style="padding:3px 10px;font-size:10px">Use from library</button>
+                  <button onclick="djt_clearSlot('${slot.key}')" class="djt-mini-btn" style="padding:3px 10px;font-size:10px">Clear</button>
+                </div>
+              </div>
+            `;
+          });
+          const container = document.getElementById('djt-slots-container');
+          if (container) container.innerHTML = html;
+        }); } catch(e) {}
+      });
+    };
+    renderSlots();
+
     const clearAllBtn = document.getElementById('djt-lib-clear');
     if (clearAllBtn) clearAllBtn.addEventListener('click', () => {
-      if (!confirm('Clear ALL saved lorebooks? This empties your saved library. The currently active lorebook stays loaded.')) return;
+      if (!confirm('Clear ALL saved lorebooks? This empties your saved library. The currently loaded slots stay intact.')) return;
       saveLorebookLibrary([]);
       const list = document.getElementById('djt-lib-list');
       if (list) list.innerHTML = '<div class="djt-lb-empty">No saved lorebooks yet.</div>';
@@ -942,49 +1044,83 @@
               <div class="djt-lb-ename">${escHTML(lb.name)}</div>
               <div class="djt-lb-emeta">${new Date(lb.dateAdded).toLocaleDateString()}</div>
             </div>
-            <button onclick="djt_loadFromLib(${i})" class="djt-mini-btn primary" style="padding:4px 12px;font-size:11px">Use</button>
+            <button onclick="djt_loadFromLib_slot('${document.getElementById('djt-load-slot').value}', ${i})" class="djt-mini-btn primary" style="padding:4px 12px;font-size:11px">Use</button>
             <button onclick="djt_deleteFromLib(${i})" class="djt-mini-btn" style="padding:4px 9px;font-size:11px" title="Delete">×</button>
           </div>
         `).join('');
       }
     });
+
     document.getElementById('djt-load-paste-btn').addEventListener('click', () => {
       const json = document.getElementById('djt-load-ta').value.trim();
+      const slot = document.getElementById('djt-load-slot').value;
       let lb; try { lb = JSON.parse(json); } catch (e) { toast('Invalid JSON'); return; }
       if (!Array.isArray(lb.entries)) { toast('Must have entries array'); return; }
-      chrome.storage.local.set({'djt:lorebook': json}, () => {
-        toast('Lorebook loaded!');
-        scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
-        close();
-      });
+      saveLorebook(slot, json);
+      toast(`Lorebook loaded into ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)}!`);
+      document.getElementById('djt-load-ta').value = '';
+      scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+      renderSlots();
     });
+
     document.getElementById('djt-load-save-btn').addEventListener('click', () => {
       const name = prompt('Lorebook name:'); if (!name) return;
       const json = document.getElementById('djt-load-ta').value.trim();
+      const slot = document.getElementById('djt-load-slot').value;
       let lb; try { lb = JSON.parse(json); } catch (e) { toast('Invalid JSON'); return; }
       if (!Array.isArray(lb.entries)) { toast('Must have entries array'); return; }
       saveToLibrary(name, json);
-      chrome.storage.local.set({'djt:lorebook': json}, () => {
-        toast('Saved & loaded!');
-        scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
-        close();
-      });
+      saveLorebook(slot, json);
+      toast(`Saved & loaded into ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)}!`);
+      document.getElementById('djt-load-ta').value = '';
+      scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+      renderSlots();
     });
-    window.djt_loadFromLib = (i) => {
+
+    window.djt_useFromLib_slot = (slot, idx) => {
       loadLorebookLibrary(lib => {
-        if (!lib[i]) return;
-        chrome.storage.local.set({'djt:lorebook': lib[i].json}, () => {
-          toast('Lorebook loaded: ' + lib[i].name);
-          scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
-          close();
-        });
+        if (idx !== undefined && !lib[idx]) return;
+        const json = idx !== undefined ? lib[idx].json : null;
+        if (!json) return;
+        saveLorebook(slot, json);
+        const libName = idx !== undefined ? lib[idx].name : 'Unknown';
+        toast(`Loaded "${libName}" into ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)}!`);
+        scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+        renderSlots();
       });
     };
+
+    window.djt_clearSlot = (slot) => {
+      if (!confirm(`Clear ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)} lorebook?`)) return;
+      clearLorebook(slot);
+      toast('Slot cleared!');
+      scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+      renderSlots();
+    };
+
     window.djt_deleteFromLib = (i) => {
-      if (!confirm('Delete this lorebook?')) return;
+      if (!confirm('Delete this lorebook from library?')) return;
       deleteFromLibrary(i);
-      const list = document.getElementById('djt-lib-list');
-      if (list) list.innerHTML = '<div class="djt-lb-empty">Deleted. Reopen to refresh.</div>';
+      loadLorebookLibrary(lib => {
+        const list = document.getElementById('djt-lib-list');
+        if (!list) return;
+        if (lib.length === 0) {
+          list.innerHTML = '<div class="djt-lb-empty">No saved lorebooks yet.</div>';
+          const clearBtn = document.getElementById('djt-lib-clear');
+          if (clearBtn) clearBtn.style.display = 'none';
+        } else {
+          list.innerHTML = lib.map((lb, i2) => `
+            <div class="djt-lb-entry" style="grid-template-columns:1fr auto auto;align-items:center">
+              <div>
+                <div class="djt-lb-ename">${escHTML(lb.name)}</div>
+                <div class="djt-lb-emeta">${new Date(lb.dateAdded).toLocaleDateString()}</div>
+              </div>
+              <button onclick="djt_loadFromLib_slot('${document.getElementById('djt-load-slot').value}', ${i2})" class="djt-mini-btn primary" style="padding:4px 12px;font-size:11px">Use</button>
+              <button onclick="djt_deleteFromLib(${i2})" class="djt-mini-btn" style="padding:4px 9px;font-size:11px" title="Delete">×</button>
+            </div>
+          `).join('');
+        }
+      });
     };
   }
 
@@ -1028,26 +1164,27 @@
       clearTimeout(panelUpdateTo);
       return;
     }
-    try { chrome.storage.local.get([LOREBOOK_KEY], d => {
-      const json = d && d[LOREBOOK_KEY];
-      if (!json) { toast('Load a lorebook first.'); openLoadLorebookModal(); return; }
+    loadAllLorebooks(merged => {
+      if (!merged || !merged.entries || !merged.entries.length) {
+        toast('Load a lorebook first.');
+        openLoadLorebookModal();
+        return;
+      }
       panelActive = true;
       card.style.display = '';
       updateActiveChatPanel();
-    }); } catch (e) { toast('Error loading panel'); }
+    });
   }
 
   function updateActiveChatPanel() {
     if (!panelActive) return;
     const card = document.getElementById('djt-acp-card'); if (!card) return;
     clearTimeout(panelUpdateTo);
-    chrome.storage.local.get([LOREBOOK_KEY], d => {
+    loadAllLorebooks(merged => {
       if (!panelActive) return;
-      const json = d && d[LOREBOOK_KEY]; if (!json) return;
-      let lb; try { lb = JSON.parse(json); } catch (e) { return; }
-      if (!Array.isArray(lb.entries)) return;
+      if (!merged || !merged.entries || !merged.entries.length) return;
       const text = recentChatText();
-      const a = lbAnalyze(text, lb.entries);
+      const a = lbAnalyze(text, merged.entries);
       const pct = Math.round(Math.min(a.totalToks, 1500) / 15);
       document.getElementById('djt-acp-toks').textContent = a.totalToks.toLocaleString();
       document.getElementById('djt-acp-pct').textContent = pct;
@@ -1071,11 +1208,17 @@
 
       const rows = a.included.map(e => {
         let how = '';
+        const slotName = e.origin || 'unknown';
+        const slotLabel = slotName === 'bot1' ? 'Bot 1' : slotName === 'bot2' ? 'Bot 2' : slotName === 'bot3' ? 'Bot 3' : 'Persona';
         if (e.pinned) how = '📌 Pinned, always loaded';
         else if (a.directMap[e.name]) how = '🎯 Direct, matched: <b>' + escHTML(a.directMap[e.name].join(', ')) + '</b>';
-        else if (a.cascadeMap[e.name]) how = a.cascadeMap[e.name].map(s => '🔗 Cascade from <b>' + escHTML(s.source) + '</b> via <b>' + escHTML(s.keys.join(', ')) + '</b>').join('<br>');
+        else if (a.cascadeMap[e.name]) {
+          const cascadeSlot = a.cascadeOriginMap && a.cascadeOriginMap[e.name] ? a.cascadeOriginMap[e.name] : e.origin || 'unknown';
+          const cascadeLabel = cascadeSlot === 'bot1' ? 'Bot 1' : cascadeSlot === 'bot2' ? 'Bot 2' : cascadeSlot === 'bot3' ? 'Bot 3' : 'Persona';
+          how = a.cascadeMap[e.name].map(s => '🔗 Cascade from <b>' + escHTML(s.source) + '</b> (' + cascadeLabel + ') via <b>' + escHTML(s.keys.join(', ')) + '</b>').join('<br>');
+        }
         return `<div style="padding:5px 7px;background:rgba(167,139,250,0.10);border-left:2px solid var(--djt-accent);border-radius:4px;margin-bottom:4px">` +
-               `<div style="font-size:12px;font-weight:600;color:var(--djt-text)">${escHTML(e.name||'(unnamed)')} <span style="color:var(--djt-muted);font-weight:400">~${a.tokMap[e.name]} tok</span></div>` +
+               `<div style="font-size:12px;font-weight:600;color:var(--djt-text)">${escHTML(e.name||'(unnamed)')} <span style="color:var(--djt-muted);font-weight:400;font-size:9px;margin-left:6px">[${slotLabel}]</span> <span style="color:var(--djt-muted);font-weight:400">~${a.tokMap[e.name]} tok</span></div>` +
                `<div style="font-size:10px;color:var(--djt-soft);line-height:1.5">${how}</div></div>`;
       }).join('');
       let cutNote = a.cut.length ? `<div style="font-size:10px;color:var(--djt-danger,#ef4444);margin-top:4px">⚠️ ${a.cut.length} entr${a.cut.length!==1?'ies':'y'} over budget (cut)</div>` : '';
