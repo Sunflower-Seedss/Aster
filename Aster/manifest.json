@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aster",
-  "version": "2.1",
+  "version": "2.2",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvDKWTYF7AG/1jqEXUlDCeo3AkmzNrlFxbbj/6A4R3ea8hKB6GXrDwgB1TkrbXeOI7tuY6on/qZhEeT55chH0ES0tLhYqsj7YChsk1q726BXmcHwkJmnK/tTHM2taDypPwJUu1vexOGDyxni316/qg/PVXVPlISia1LesmKzURkOknCws43jwI6t5j+kN1OpkdTphABpOF8CQ37co5xW4hXUMLAwteXnnOlyOXXHxJLQipJWsXNFmPi2G9Y+pZOeZhId8AufvfYMr37hrRXSFNlw5rYHVap6KFvO93gFaNmQrk+BAumC/RUcHa4dk60E1jUnRXMiiE+GOA15zAB9HKwIDAQAB",
   "description": "Aster — quality-of-life tools for DreamJourney AI: chat stats, saved replies, lorebook tools, and Quill (connect your own local/API model). Local-only. Made by SunflowerS.",
   "permissions": [
