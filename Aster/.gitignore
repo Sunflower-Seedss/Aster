@@ -1,0 +1,14 @@
+# Local-only developer notes — keep OPSEC-sensitive context out of the repo
+CLAUDE.md
+LOREBOOK-GUIDE.md
+LOREBOOK-WORKSHOP-GUIDE.md
+
+# Signing keys / packaged builds — never commit
+*.pem
+*.crx
+*.zip
+
+# OS / tooling cruft
+.DS_Store
+Thumbs.db
+node_modules/

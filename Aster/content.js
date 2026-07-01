@@ -1,0 +1,3346 @@
+// ============================================================
+//  Aster - content script v3.0
+//  Made by SunflowerS at Dreamjourney AI
+// ============================================================
+(function () {
+  'use strict';
+  if (window.__djtLoaded) return;
+  window.__djtLoaded = true;
+
+  const SETTINGS_KEY = 'djt:settings';
+  let currentSessionId = null, active = false;
+  let containerObserver = null, scratchpadInterval = null, observedContainer = null;
+  const storeKey = () => 'djt:' + currentSessionId;
+
+  // A short, generic starter the user can replace. Used as the default
+  // contents of the Thinking Template Override box.
+  const DEFAULT_THINKING_SAMPLE =
+    'Before you reply, think briefly:\n' +
+    '- Where are we, who is present, and what just happened?\n' +
+    '- What does {{char}} want right now, and how would they truly react?\n' +
+    '- Stay consistent with established facts, tone, and personalities.\n' +
+    'Then write the reply in character.';
+
+  const DEFAULT_SETTINGS = {
+    theme: 'dark', saveRegens: true, stats: true, nexus: true,
+    scratchpad: true, autoRefresh: true, deleteThinking: false,
+    panelPos: null, panelSize: null, activeTab: 'chat', cardCollapsed: {}, scanActive: false, skin: 'dreamjourney',
+    panelCollapsed: true,   // start collapsed (smallest form) by default; remembers the user's last choice
+
+    // Visibility: map of section-id -> true when the user has hidden it from the
+    // pop-out panel via the Settings Window. Absent/false = visible. Honored in Stage 2.
+    hidden: {},
+    // Quill (local-LLM / optional API helper). Connection is configured in the
+    // Settings Window; the tool UI lives in the pop-out under Advanced.
+    // backend: 'ollama' | 'openai' | 'lmstudio' | 'kobold' | 'api'
+    quill: {
+      enabled: false,
+      ack: false,          // user has read the Quill guide + safety note
+      backend: 'ollama',
+      ollamaUrl: 'http://localhost:11434',
+      ollamaModel: '',
+      lmstudioUrl: 'http://localhost:1234',
+      lmstudioModel: '',
+      koboldUrl: 'http://localhost:5001',
+      openaiBaseUrl: 'https://api.openai.com/v1',
+      openaiModel: 'gpt-4o-mini',
+      apiKey: ''            // user-entered, stored locally only
+    },
+
+    // Thinking Template Override, PER SESSION: { "<sessionId>": { enabled, template } }.
+    // dj-net.js replaces the `thinkingTemplate` on /api/chat for that session only.
+    thinkingOverride: {},
+    // User's saved thinking-template presets: [{ name, template }].
+    thinkingPresets: [],
+    // Per-session "hide from AI": { "<sessionId>": [{ needle, preview }] }.
+    contextExclusions: {}
+  };
+  const DEFAULT_STORE = {
+    rerolls: 0, sinceNexus: 0,
+    regenHistory: { versions: [], current: 0 },
+    scratch: '',
+    scratchHistory: [],      // up to 5 most-recent SENT messages
+    countsSnapshot: { user: 0, bot: 0, total: 0 },
+    quillPersona: ''         // per-session: who Quill writes AS (max 500 chars)
+  };
+
+  let settings = Object.assign({}, DEFAULT_SETTINGS);
+  let store    = Object.assign({}, DEFAULT_STORE);
+  let hasScrolledToTop = false;
+
+  // ---- storage ------------------------------------------------
+  function loadAll() {
+    return new Promise(res => {
+      try {
+        chrome.storage.local.get([storeKey(), SETTINGS_KEY], data => {
+          store    = Object.assign({}, DEFAULT_STORE, (data && data[storeKey()]) || {});
+          settings = Object.assign({}, DEFAULT_SETTINGS, (data && data[SETTINGS_KEY]) || {});
+          if (!settings.cardCollapsed || typeof settings.cardCollapsed !== 'object') settings.cardCollapsed = {};
+          if (!settings.hidden || typeof settings.hidden !== 'object') settings.hidden = {};
+          // Deep-merge quill so new default keys survive an older stored partial.
+          settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, (settings.quill && typeof settings.quill === 'object') ? settings.quill : {});
+          // thinkingOverride is a per-session map now. Migrate the old single
+          // global { enabled, template } form (carry a custom template to presets).
+          if (!settings.thinkingOverride || typeof settings.thinkingOverride !== 'object') settings.thinkingOverride = {};
+          if (typeof settings.thinkingOverride.template === 'string') {
+            const _oldT = settings.thinkingOverride.template;
+            settings.thinkingOverride = {};
+            if (_oldT && _oldT !== DEFAULT_THINKING_SAMPLE) {
+              if (!Array.isArray(settings.thinkingPresets)) settings.thinkingPresets = [];
+              if (!settings.thinkingPresets.some(p => p && p.template === _oldT)) settings.thinkingPresets.push({ name: 'Carried over', template: _oldT });
+            }
+          }
+          if (!Array.isArray(settings.thinkingPresets)) settings.thinkingPresets = [];
+          if (!settings.contextExclusions || typeof settings.contextExclusions !== 'object') settings.contextExclusions = {};
+          if (!store.regenHistory || !Array.isArray(store.regenHistory.versions))
+            store.regenHistory = { versions: [], current: 0 };
+          if (!Array.isArray(store.scratchHistory)) store.scratchHistory = [];
+          res();
+        });
+      } catch (e) { res(); }
+    });
+  }
+  let storeTimer = null;
+  const saveStore = () => {
+    clearTimeout(storeTimer);
+    storeTimer = setTimeout(() => {
+      try { if (currentSessionId) chrome.storage.local.set({ [storeKey()]: store }); } catch (e) {}
+    }, 150);
+  };
+  const saveSettings = () => { try { chrome.storage.local.set({ [SETTINGS_KEY]: settings }); } catch (e) {} };
+
+  // ---- url helpers --------------------------------------------
+  const isSessionUrl = () => /\/app\/session\/[^/]+/.test(location.pathname);
+  const sessionIdFromUrl = () => { const m = location.pathname.match(/\/app\/session\/([^/?#]+)/); return m ? m[1] : null; };
+  const isBotPage = () => /\/app\/create\/bot\//.test(location.pathname);
+  const botIdFromUrl = () => { const m = location.pathname.match(/\/app\/create\/bot\/([^/?#]+)/); return m ? m[1] : 'new'; };
+
+  // ---- DOM helpers --------------------------------------------
+  const getContainer = () => document.querySelector('.scrollchatmessages');
+  function getMessages() {
+    const c = getContainer(); if (!c) return [];
+    const seen = new Set();
+    return [...c.querySelectorAll('[id^="message-"]')].filter(el => { if (seen.has(el.id)) return false; seen.add(el.id); return true; });
+  }
+  const isBot   = el => !!el.querySelector('img[alt="@shadcn"]');
+  const msgText = el => ((el.querySelector('.markdown') || el).innerText || '').trim();
+  const lastBot = () => { const ms = getMessages(); for (let i = ms.length-1; i >= 0; i--) if (isBot(ms[i])) return ms[i]; return null; };
+  function fireHover(el) { ['pointerover','mouseover','mouseenter','pointerenter','mousemove'].forEach(t => { try { el.dispatchEvent(new MouseEvent(t,{bubbles:true})); } catch(e){} }); }
+  function setReactValue(el, value) {
+    const proto = el.tagName==='TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto,'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));
+  }
+  const waitFor = (fn, timeout=5000, interval=120) => new Promise(res => {
+    const t0 = Date.now();
+    (function poll() { let r=null; try{r=fn()}catch(e){} if(r) return res(r); if(Date.now()-t0>timeout) return res(null); setTimeout(poll,interval); })();
+  });
+
+  // ---- STATS --------------------------------------------------
+  function liveCounts() { let u=0,b=0; getMessages().forEach(el=>isBot(el)?b++:u++); return {user:u,bot:b,total:u+b}; }
+  const nexusClass = n => n <= 20 ? 'green' : n <= 40 ? 'orange' : 'red';
+
+  function countRemovedMessages(mutations) {
+    const ids = new Set();
+    mutations.forEach(m => [...m.removedNodes].forEach(n => {
+      if (n.nodeType!==1) return;
+      const add = id => { if (id&&id.startsWith('message-')) ids.add(id); };
+      add(n.id); if (n.querySelectorAll) [...n.querySelectorAll('[id^="message-"]')].forEach(e=>add(e.id));
+    }));
+    return ids.size;
+  }
+
+  function refreshStatsUI() {
+    if (!active) return;
+    const c = liveCounts(); store.countsSnapshot = c;
+    const set = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+    set('djt-s-user',c.user); set('djt-s-bot',c.bot); set('djt-s-total',c.total); set('djt-s-rerolls',store.rerolls);
+    const nexusSection = document.getElementById('djt-nexus-section');
+    if (nexusSection) nexusSection.style.display = (settings.stats && settings.nexus) ? '' : 'none';
+    const nv = document.getElementById('djt-nexus-val');
+    if (nv) { nv.textContent=store.sinceNexus; nv.className='djt-nexus-num '+nexusClass(store.sinceNexus); }
+    const warn = document.getElementById('djt-nexus-warn');
+    if (warn) warn.style.display = (settings.stats && settings.nexus && store.sinceNexus >= 50) ? 'block' : 'none';
+    refreshScratchUI();
+    saveStore();
+  }
+
+  // ---- REGEN TRACKING -----------------------------------------
+  let expectingReply=false, regenPending=false;
+  let regenTargetIdx=-1, regenAnchorUserId=null, regenStartTime=0;
+  let settleTimer=null, previewIndex=null;
+  let djtMutating=false, statsDebounce=null, thinkingDebounce=null;
+
+  function findRegenTarget() {
+    const ms = getMessages();
+    // Primary: first bot message after the stable anchor user message
+    if (regenAnchorUserId) {
+      const ai = ms.findIndex(m => m.id === regenAnchorUserId);
+      if (ai >= 0) { for (let i=ai+1;i<ms.length;i++) if(isBot(ms[i])) return ms[i]; }
+    }
+    // Fallback: index-based
+    if (regenTargetIdx>=0 && ms[regenTargetIdx]) return ms[regenTargetIdx];
+    return lastBot();
+  }
+
+  function onUserSent() {
+    // Save the unsent draft as the most-recent sent item (handles Stop-button message deletion)
+    if (settings.scratchpad && store.scratch && store.scratch.trim()) {
+      if (!Array.isArray(store.scratchHistory)) store.scratchHistory = [];
+      store.scratchHistory.unshift(store.scratch.trim());
+      if (store.scratchHistory.length > 5) store.scratchHistory.pop();
+    }
+    if (settings.stats) store.sinceNexus += 1;
+    expectingReply = true;
+    store.regenHistory = { versions: [], current: 0 };
+    previewIndex = null; store.scratch = '';
+    saveStore(); refreshStatsUI(); refreshRegenPanel(); hideRestoreBar();
+    refreshScratchHistUI();
+  }
+
+  function captureRegenStart(botEl) {
+    const ms = getMessages();
+    regenTargetIdx = ms.indexOf(botEl);
+    // Stable anchor: the preceding user message id doesn't change during regen
+    regenAnchorUserId = null;
+    for (let i=regenTargetIdx-1; i>=0; i--) { if (!isBot(ms[i])) { regenAnchorUserId=ms[i].id; break; } }
+    regenStartTime = Date.now();
+    const currentText = msgText(botEl);
+    let h = store.regenHistory;
+    if (!h||!Array.isArray(h.versions)) h={versions:[],current:0};
+    if (h.versions.indexOf(currentText)===-1) { h.versions.push(currentText); h.current=h.versions.length-1; }
+    store.regenHistory=h; regenPending=true; saveStore();
+  }
+
+  function settleRegen() {
+    if (!regenPending) return;
+    if (Date.now()-regenStartTime>45000) { regenPending=false; regenTargetIdx=-1; regenAnchorUserId=null; previewIndex=null; refreshStatsUI(); refreshRegenPanel(); return; }
+    const lb = findRegenTarget();
+    if (!lb) { settleTimer=setTimeout(settleRegen,1500); return; }
+    const newText = msgText(lb);
+    const h = store.regenHistory;
+    if (!newText||newText.length<20||h.versions.indexOf(newText)!==-1) { settleTimer=setTimeout(settleRegen,1500); return; }
+    h.versions.push(newText); h.current=h.versions.length-1;
+    store.regenHistory=h; store.rerolls+=1;
+    regenPending=false; regenTargetIdx=-1; regenAnchorUserId=null; previewIndex=null;
+    saveStore(); refreshStatsUI(); refreshRegenPanel();
+  }
+
+  function startContainerObserver() {
+    const c = getContainer(); if (!c) return;
+    if (containerObserver) containerObserver.disconnect();
+    containerObserver = new MutationObserver(mutations => {
+      if (!active||djtMutating) return;
+      let added=false, removed=false;
+      mutations.forEach(m => { if(m.addedNodes.length) added=true; if(m.removedNodes.length) removed=true; });
+      if (removed&&!regenPending&&settings.stats) { const n=countRemovedMessages(mutations); if(n>0) store.sinceNexus=Math.max(0,store.sinceNexus-n); }
+      if (added&&expectingReply&&!regenPending) {
+        clearTimeout(settleTimer); settleTimer=setTimeout(()=>{ if(settings.stats) store.sinceNexus+=1; expectingReply=false; saveStore(); clearTimeout(statsDebounce); refreshStatsUI(); clearTimeout(thinkingDebounce); thinkingDebounce=setTimeout(refreshThinkingButtons,600); },900);
+      }
+      if (added&&regenPending) { clearTimeout(settleTimer); settleTimer=setTimeout(settleRegen,900); }
+      if (added||removed) { clearTimeout(statsDebounce); statsDebounce=setTimeout(refreshStatsUI,250); clearTimeout(thinkingDebounce); thinkingDebounce=setTimeout(refreshThinkingButtons,600); if(scanActive){clearTimeout(scanDebounce);scanDebounce=setTimeout(runChatScan,400);} if(panelActive){clearTimeout(panelDebounce);panelDebounce=setTimeout(updateActiveChatPanel,500);} }
+    });
+    containerObserver.observe(c,{childList:true,subtree:true});
+    observedContainer = c;
+  }
+
+  // ---- DELEGATION --------------------------------------------
+  function setupDelegation() {
+    document.addEventListener('click', e => {
+      if (!active||!e.target.closest) return;
+      const regen = e.target.closest('[aria-label="Regenerate response"]');
+      if (regen&&settings.saveRegens) { const idEl=regen.closest('[id^="message-"]'); if(idEl){const botEl=getMessages().find(m=>m.id===idEl.id); if(botEl)captureRegenStart(botEl);} return; }
+      const stop = e.target.closest('[aria-label="Stop generating response"]');
+      if (stop&&settings.autoRefresh) { showRefreshToast(); return; }
+      const nexus = e.target.closest('[aria-label="Open Memory Nexus"]');
+      if (nexus) { store.sinceNexus=0; saveStore(); refreshStatsUI(); return; }
+      const send = e.target.closest('[aria-label="Send message"]');
+      if (send) { onUserSent(); return; }
+    },true);
+    document.addEventListener('keydown', e => {
+      if (!active||e.key!=='Enter'||e.shiftKey) return;
+      const ta=e.target;
+      if (ta&&ta.tagName==='TEXTAREA'&&ta.placeholder==='Send your message...') if((ta.value||'').trim()) onUserSent();
+    },true);
+  }
+
+  // ---- REGEN PANEL -------------------------------------------
+  function refreshRegenPanel() {
+    const wrap=document.getElementById('djt-regen'); if(!wrap) return;
+    const h=store.regenHistory;
+    if (!settings.saveRegens||!h||!Array.isArray(h.versions)||h.versions.length<2){wrap.style.display='none';return;}
+    wrap.style.display='block';
+    if(previewIndex===null) previewIndex=h.current;
+    previewIndex=Math.max(0,Math.min(h.versions.length-1,previewIndex));
+    const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
+    set('djt-regen-pos',(previewIndex+1)+' / '+h.versions.length);
+    const prev=document.getElementById('djt-regen-prev');const next=document.getElementById('djt-regen-next');
+    if(prev) prev.disabled=previewIndex===0; if(next) next.disabled=previewIndex===h.versions.length-1;
+    const body=document.getElementById('djt-regen-preview'); if(body) body.textContent=h.versions[previewIndex];
+    const useBtn=document.getElementById('djt-regen-use');
+    if(useBtn){useBtn.textContent=previewIndex===h.current?'Currently shown':'Use this reply';useBtn.disabled=previewIndex===h.current;}
+  }
+
+  async function applyVersion(text) {
+    const lb=lastBot(); if(!lb){toast('No bot message found.');return;}
+    const useBtn=document.getElementById('djt-regen-use'); if(useBtn){useBtn.disabled=true;useBtn.textContent='Applying...';}
+    fireHover(lb);
+    const editBtn=await waitFor(()=>lb.querySelector('[aria-label="Edit assistant message"]'),4000); if(!editBtn){toast('Could not open edit.');refreshRegenPanel();return;}
+    editBtn.click();
+    const ta=await waitFor(()=>[...document.querySelectorAll('textarea')].find(t=>t.placeholder==='Edit your message...'),4000); if(!ta){toast('Edit box did not appear.');refreshRegenPanel();return;}
+    setReactValue(ta,text);
+    let scope=ta.parentElement; for(let i=0;i<6&&scope;i++){if(scope.querySelectorAll('button').length>=2)break;scope=scope.parentElement;}
+    const saveBtn=await waitFor(()=>[...(scope||document).querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='Save'),3000); if(!saveBtn){toast('Save button not found.');refreshRegenPanel();return;}
+    saveBtn.click(); store.regenHistory.current=previewIndex; saveStore(); toast('Reply applied!'); setTimeout(refreshRegenPanel,600);
+  }
+
+  // ---- DELETE THINKING ----------------------------------------
+  function hasThinkingBlock(botEl) {
+    const mk=botEl.querySelector('.markdown'); if(!mk) return false;
+    if(mk.querySelector('details')) return true;
+    return [...mk.querySelectorAll('button')].some(b=>{ const t=(b.textContent||'').toLowerCase(); const a=(b.getAttribute('aria-label')||'').toLowerCase(); return /thinking|show thinking|hide thinking/.test(t)||/thinking/.test(a); });
+  }
+  function refreshThinkingButtons() {
+    if (!active) return;
+    if (!settings.deleteThinking) {
+      const ex=[...document.querySelectorAll('.djt-del-thinking')];
+      if(ex.length){djtMutating=true;ex.forEach(b=>b.remove());djtMutating=false;}
+      return;
+    }
+    // Pass 1: remove buttons whose message no longer has a thinking block
+    djtMutating=true;
+    [...document.querySelectorAll('.djt-del-thinking')].forEach(btn=>{
+      const mk=btn.closest('.markdown');
+      if(!mk){btn.remove();return;}
+      const botEl=getMessages().find(m=>m.querySelector('.markdown')===mk);
+      if(!botEl||!hasThinkingBlock(botEl)) btn.remove();
+    });
+    djtMutating=false;
+    // Pass 2: add buttons to messages that have a thinking block but no button yet
+    getMessages().forEach(botEl=>{
+      if(!isBot(botEl)) return;
+      if(!hasThinkingBlock(botEl)) return;
+      const mk=botEl.querySelector('.markdown'); if(!mk) return;
+      if(mk.querySelector('.djt-del-thinking')) return;
+      const btn=document.createElement('button');
+      btn.className='djt-del-thinking';
+      btn.title='Remove the thinking block from this reply (permanently edits the message)';
+      btn.innerHTML='<span class="djt-del-icon">✕</span> Remove thinking';
+      btn.addEventListener('click',e=>{e.stopPropagation();deleteThinking(botEl);});
+      const details=mk.querySelector('details');
+      const thinkBtn=[...mk.querySelectorAll('button')].find(b=>/thinking|show|hide/i.test(b.textContent||''));
+      const refEl=details||(thinkBtn&&thinkBtn.closest('div'))||null;
+      djtMutating=true;
+      if(refEl&&refEl.parentElement===mk) mk.insertBefore(btn,refEl);
+      else mk.insertAdjacentElement('afterbegin',btn);
+      djtMutating=false;
+    });
+  }
+  async function deleteThinking(botEl) {
+    const mk=botEl.querySelector('.markdown');
+    const existingBtn=mk&&mk.querySelector('.djt-del-thinking');
+    if(existingBtn){djtMutating=true;existingBtn.style.display='none';djtMutating=false;}
+    const restore=()=>{if(existingBtn){djtMutating=true;existingBtn.style.display='';djtMutating=false;}};
+    fireHover(botEl);
+    const editBtn=await waitFor(()=>botEl.querySelector('[aria-label="Edit assistant message"]'),4000);
+    if(!editBtn){toast('Could not open edit.');restore();return;}
+    editBtn.click();
+    const ta=await waitFor(()=>[...document.querySelectorAll('textarea')].find(t=>t.placeholder==='Edit your message...'),4000);
+    if(!ta){toast('Edit box did not appear.');restore();return;}
+    const original=ta.value;
+    // Strip all thinking block variations:
+    // 1. ```<thinking>...</thinking>```  (backtick-fenced)
+    // 2. <thinking>...</thinking>        (plain tags, multiline)
+    // 3. [BRAIN]:```<thinking>...</thinking>``` (BRAIN prefix)
+    let stripped=original
+      .replace(/\[BRAIN\]:\s*```\s*[\s\S]*?<\/thinking>\s*```\s*/gi,'')
+      .replace(/```\s*<thinking>[\s\S]*?<\/thinking>\s*```\s*/gi,'')
+      .replace(/<thinking>[\s\S]*?<\/thinking>\s*/gi,'')
+      .trim();
+    if(stripped===original.trim()){
+      let sc=ta.parentElement;for(let i=0;i<6&&sc;i++){if(sc.querySelectorAll('button').length>=2)break;sc=sc.parentElement;}
+      const cb=[...(sc||document).querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='Cancel');
+      if(cb)cb.click();toast('No thinking block found.');restore();return;
+    }
+    setReactValue(ta,stripped);
+    let scope=ta.parentElement; for(let j=0;j<6&&scope;j++){if(scope.querySelectorAll('button').length>=2)break;scope=scope.parentElement;}
+    const saveBtn=await waitFor(()=>[...(scope||document).querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='Save'),3000);
+    if(!saveBtn){toast('Save button not found.');restore();return;}
+    if(existingBtn){djtMutating=true;existingBtn.remove();djtMutating=false;}
+    saveBtn.click(); toast('Thinking block removed.'); setTimeout(refreshThinkingButtons,800);
+  }
+
+  // ---- BEE MOVIE easter egg ----------------------------------
+  function triggerBeeMovie() {
+    const popup = document.createElement('div'); popup.id = 'djt-bee-popup';
+    popup.innerHTML =
+      '<div class="djt-bee-title">🐝 Replacing chat history with the entire script of the Bee Movie, please wait!</div>' +
+      '<div class="djt-bee-bar-wrap"><div id="djt-bee-bar"></div></div>';
+    document.body.appendChild(popup);
+    setTimeout(() => { const b = document.getElementById('djt-bee-bar'); if (b) b.style.width = '100%'; }, 60);
+    const beeEls = [];
+    for (let i = 0; i < 22; i++) {
+      setTimeout(() => {
+        const b = document.createElement('div'); b.className = 'djt-bee-fly'; b.textContent = '🐝';
+        b.style.cssText = `position:fixed;font-size:${18+Math.random()*18}px;z-index:999998;pointer-events:none;` +
+          `left:${Math.random()*100}vw;top:${Math.random()*100}vh;` +
+          `animation:djt-bee-buzz ${1.2+Math.random()*1.2}s ease-in-out infinite alternate;` +
+          `--bx:${(Math.random()-.5)*220}px;--by:${(Math.random()-.5)*180}px;`;
+        document.body.appendChild(b); beeEls.push(b);
+      }, i * 70);
+    }
+    setTimeout(() => {
+      popup.classList.add('djt-bee-shaking');
+      setTimeout(() => {
+        const t = popup.querySelector('.djt-bee-title'); if (t) t.innerHTML = 'Just kidding! 😄';
+        const bw = popup.querySelector('.djt-bee-bar-wrap'); if (bw) bw.style.display = 'none';
+        popup.classList.remove('djt-bee-shaking');
+      }, 450);
+    }, 2000);
+    setTimeout(() => { popup.remove(); beeEls.forEach(b => b.remove()); }, 4200);
+  }
+
+  // ---- BLOSSOMS -----------------------------------------------
+  function bloomBlossoms() {
+    if (Math.random() < 0.01) { triggerBeeMovie(); return; } // 1 in 100
+    const useSuns = Math.random() < 0.15;
+    const petals = useSuns
+      ? ['☀️','🌟','✨','💫','⭐','🌞']
+      : ['🌸','🌺','🌷','✿','❀','🌼'];
+    let i = 0;
+    function spawnBatch() {
+      for (let b = 0; b < 5 && i < 25; b++, i++) {
+        const el = document.createElement('div');
+        el.className = 'djt-blossom';
+        el.textContent = petals[Math.floor(Math.random() * petals.length)];
+        const size = useSuns ? (18 + Math.random() * 16) : (14 + Math.random() * 18);
+        const dur  = 3 + Math.random() * 3;
+        const left = Math.random() * 100;
+        const sway = (Math.random() - 0.5) * 140;
+        const rot  = useSuns ? (Math.random() * 360) : (Math.random() * 600 - 300);
+        el.style.cssText =
+          `position:fixed;top:-50px;left:${left}vw;font-size:${size}px;` +
+          `z-index:999999;pointer-events:none;user-select:none;` +
+          `animation:djt-fall ${dur}s ease-in forwards;` +
+          `--djt-sway:${sway}px;--djt-rot:${rot}deg;`;
+        document.body.appendChild(el);
+        el.addEventListener('animationend', () => el.remove(), { once: true });
+      }
+      if (i < 25) setTimeout(() => requestAnimationFrame(spawnBatch), 200);
+    }
+    requestAnimationFrame(spawnBatch);
+  }
+
+  // ---- SCRATCHPAD --------------------------------------------
+  let scratchTimer=null, scratchHistIdx=0;
+  function hookScratchpad() {
+    if(!active) return;
+    const ta=document.querySelector('textarea[placeholder="Send your message..."]'); if(!ta||ta.dataset.djtScratch) return;
+    ta.dataset.djtScratch='1';
+    ta.addEventListener('input',()=>{ if(!settings.scratchpad) return; clearTimeout(scratchTimer); scratchTimer=setTimeout(()=>{store.scratch=ta.value||'';saveStore();refreshScratchUI();},400); });
+  }
+  function refreshScratchUI() {
+    const card=document.getElementById('djt-scratch-card'); if(!card) return;
+    card.style.display=settings.scratchpad?'':'none';
+    const txt=document.getElementById('djt-scratch-txt'); const clearBtn=document.getElementById('djt-scratch-clear'); if(!txt) return;
+    if(store.scratch&&store.scratch.trim()){txt.textContent=store.scratch.length>65?store.scratch.slice(0,62)+'...':store.scratch;txt.className='djt-scratch-preview';if(clearBtn)clearBtn.style.display='';}
+    else{txt.textContent='Nothing saved yet';txt.className='djt-scratch-preview djt-muted-text';if(clearBtn)clearBtn.style.display='none';}
+    refreshScratchHistUI();
+  }
+  function refreshScratchHistUI() {
+    const histSec=document.getElementById('djt-hist-section'); if(!histSec) return;
+    const hist=store.scratchHistory||[];
+    histSec.style.display=hist.length?'':'none';
+    if(!hist.length) return;
+    scratchHistIdx=Math.max(0,Math.min(hist.length-1,scratchHistIdx));
+    const pos=document.getElementById('djt-hist-pos'); if(pos) pos.textContent=(scratchHistIdx+1)+'/'+hist.length+' Saved';
+    const prev=document.getElementById('djt-hist-prev'); const next=document.getElementById('djt-hist-next');
+    if(prev) prev.disabled=scratchHistIdx===0; if(next) next.disabled=scratchHistIdx===hist.length-1;
+    const pv=document.getElementById('djt-hist-preview'); if(pv) pv.textContent=hist[scratchHistIdx]||'';
+  }
+  function maybeOfferRestore() {
+    if(!settings.scratchpad) return;
+    const ta=document.querySelector('textarea[placeholder="Send your message..."]'); if(!ta||(ta.value||'').trim()) return;
+    if(!store.scratch||!store.scratch.trim()) return;
+    showRestoreBar(store.scratch);
+  }
+  function showRestoreBar(text) {
+    if(document.getElementById('djt-restore')) return;
+    const bar=document.createElement('div'); bar.id='djt-restore';
+    bar.innerHTML=`<span class="djt-restore-txt">Unsent draft recovered (${text.length} chars)</span><button id="djt-restore-yes" class="djt-mini-btn">↩️ Restore</button><button id="djt-restore-no" class="djt-mini-btn ghost">✖️ Dismiss</button>`;
+    document.body.appendChild(bar);
+    document.getElementById('djt-restore-yes').addEventListener('click',()=>{ const ta=document.querySelector('textarea[placeholder="Send your message..."]'); if(ta){setReactValue(ta,text);ta.focus();} hideRestoreBar(); });
+    document.getElementById('djt-restore-no').addEventListener('click',hideRestoreBar);
+  }
+  const hideRestoreBar=()=>{ const b=document.getElementById('djt-restore'); if(b)b.remove(); };
+
+  // ---- AUTO-REFRESH ------------------------------------------
+  function showRefreshToast() {
+    if(document.getElementById('djt-refresh-toast')) return;
+    let left=3,cancelled=false;
+    const t=document.createElement('div'); t.id='djt-refresh-toast';
+    t.innerHTML=`<div class="djt-rt-row"><span>Refresh in</span><span class="djt-rt-count">${left}</span><button class="djt-rt-cancel">Cancel</button></div><div class="djt-rt-note">Refreshing after stopping a generation reduces the chance of double or vanishing messages.</div>`;
+    document.body.appendChild(t); t.querySelector('.djt-rt-cancel').addEventListener('click',()=>{cancelled=true;t.remove();});
+    const iv=setInterval(()=>{ if(cancelled){clearInterval(iv);return;} left--; const c=t.querySelector('.djt-rt-count');if(c)c.textContent=left; if(left<=0){clearInterval(iv);t.remove();saveStore();location.reload();} },1000);
+  }
+
+  // ---- DOWNLOAD ----------------------------------------------
+  async function scrollToTop(scrollEl) {
+    // Pulse approach: set scrollTop=0 every 900ms and let DJ scroll back naturally.
+    // DJ uses an IntersectionObserver on a sentinel at the top of the chat to trigger
+    // batch loads. Each pulse brings the sentinel into view, fires a load, then DJ
+    // snaps back down. The next pulse repeats this.
+    scrollEl.style.overflowAnchor = 'none';
+    let lastH = -1, stable = 0;
+    for (let g = 0; g < 120; g++) {
+      scrollEl.scrollTop = 0;
+      await new Promise(r => setTimeout(r, 900));
+      const h = scrollEl.scrollHeight;
+      if (h === lastH) {
+        stable++;
+        // Don't stop if the first visible message is a user message -
+        // that means we haven't reached the actual top yet. Keep going.
+        const firstMsg = getMessages()[0];
+        const firstIsBot = firstMsg && isBot(firstMsg);
+        if (stable >= 6 && firstIsBot) break;    // 5.4s stable + bot opener = done
+        if (stable >= 12) break;                  // 10.8s absolute ceiling
+      } else {
+        stable = 0;
+      }
+      lastH = h;
+    }
+    scrollEl.style.overflowAnchor = '';
+    scrollEl.scrollTop = 0;
+  }
+
+  async function doScrollToTop() {
+    const scrollEl = getContainer();
+    if (!scrollEl) { toast('Chat not found.'); return false; }
+    const btn = document.getElementById('djt-scroll-top-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Scrolling...'; }
+    const scrollPopup = document.createElement('div');
+    scrollPopup.id = 'djt-scroll-popup';
+    scrollPopup.innerHTML = '🌞 Scrolling to first message, please wait! 🌞';
+    document.body.appendChild(scrollPopup);
+    await scrollToTop(scrollEl);
+    scrollPopup.remove();
+    if (btn) { btn.disabled = false; btn.textContent = '↑ Scroll to first message'; }
+
+    // Show verification modal so user can confirm they're at the actual first message
+    const msgs = getMessages();
+    const firstText = msgs.length ? msgText(msgs[0]).slice(0, 180) : '(no messages)';
+    const choice = await confirmVerifyFirstModal(firstText);
+
+    if (choice === 'yes') {
+      hasScrolledToTop = true;
+      return true;
+    }
+    return false;
+  }
+
+  async function downloadChat() {
+    if (!hasScrolledToTop) {
+      const choice = await confirmScrollFirstModal();
+      if (choice === 'cancel') return;
+      if (choice === 'yes') {
+        const ok = await doScrollToTop();
+        if (!ok) return;
+      }
+    }
+
+    const msgs = getMessages();
+    const firstText = msgs.length ? msgText(msgs[0]).slice(0, 180) : '(no messages)';
+    const confirm = await confirmDownloadModal(firstText);
+    if (confirm !== 'yes') return;
+
+    const charName = (() => {
+      const backBtn = document.querySelector('[aria-label="Go back to main app"]');
+      const name = backBtn?.parentElement?.querySelector('p[class*="font-bold"]')?.innerText?.trim();
+      return (name || '').slice(0, 50) || 'Bot';
+    })();
+    const lines = ["Aster Chat Export",
+      'Made by SunflowerS at Dreamjourney AI', 'Character: ' + charName,
+      'Session: ' + currentSessionId, 'Exported: ' + new Date().toLocaleString(),
+      ''.padEnd(60, '-'), ''];
+    msgs.forEach(m => { lines.push(isBot(m) ? '[' + charName + ']' : '[YOU]'); lines.push(msgText(m)); lines.push(''); });
+    const c = liveCounts();
+    lines.push(''.padEnd(60, '-'));
+    lines.push(`Counts: ${c.user} you / ${c.bot} bot / ${c.total} total / ${store.rerolls} rerolls`);
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'dreamjourney-' + String(currentSessionId).slice(0, 8) + '.txt';
+    a.click(); URL.revokeObjectURL(url);
+  }
+
+  function scrollToBottom() {
+    const scrollEl = getContainer();
+    if (!scrollEl) { toast('Chat not found.'); return; }
+    scrollEl.scrollTop = scrollEl.scrollHeight;
+  }
+
+  // ---- LOREBOOK TESTER (overlay) -----------------------------
+  // Four-slot lorebook system: bot1, bot2, bot3, persona
+  const LOREBOOKS_KEY = 'djt:lorebooks';
+  let lbParsed = null;
+
+  // Load all 4 lorebooks and merge entries with origin tracking
+  function loadAllLorebooks(cb) {
+    try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+      const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+      const merged = {entries: [], slotMap: {}};
+      const slots = ['bot1', 'bot2', 'bot3', 'persona'];
+      slots.forEach(slot => {
+        if (data[slot]) {
+          try {
+            const lb = JSON.parse(data[slot]);
+            if (Array.isArray(lb.entries)) {
+              lb.entries.forEach(e => {
+                merged.entries.push(Object.assign({}, e, {origin: slot}));
+                merged.slotMap[e.name] = slot;
+              });
+            }
+          } catch (e) {}
+        }
+      });
+      cb(merged);
+    }); } catch (e) { cb({entries: [], slotMap: {}}); }
+  }
+
+  // Save a single lorebook slot
+  function saveLorebook(slot, json) {
+    try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+      const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+      data[slot] = json;
+      chrome.storage.local.set({[LOREBOOKS_KEY]: data});
+    }); } catch (e) {}
+  }
+
+  // Clear a single lorebook slot
+  function clearLorebook(slot) {
+    try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+      const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+      data[slot] = null;
+      chrome.storage.local.set({[LOREBOOKS_KEY]: data});
+    }); } catch (e) {}
+  }
+
+  function escHTML(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Case-insensitive, word-boundary matches of `trigger` in `text` -> [{start,end}]
+  // `_` counts as a word character (like DreamJourney's matcher), so a trigger
+  // touching `_` on EITHER side has no boundary and won't match. This is what
+  // makes the underscore-wrap convention work — including multi-word wraps like
+  // `_Imperium Divinum_`, where the inner word "Imperium" is followed by a space
+  // but preceded by `_`, so it is correctly skipped.
+  function lbFindMatches(text, trigger) {
+    const tLow = trigger.toLowerCase(), txLow = text.toLowerCase();
+    const out = []; let idx = 0;
+    while (idx <= txLow.length - tLow.length) {
+      const pos = txLow.indexOf(tLow, idx);
+      if (pos === -1) break;
+      const end = pos + tLow.length;
+      const before = pos > 0 ? txLow[pos-1] : ' ';
+      const after  = end < txLow.length ? txLow[end] : ' ';
+      if (!/[a-z0-9_]/.test(before) && !/[a-z0-9_]/.test(after)) out.push({ start: pos, end });
+      idx = pos + 1;
+    }
+    return out;
+  }
+  // Matches that are NOT wrapped in protective punctuation (_w_ /w/ -w- <w>)
+  function lbFindUnwrapped(text, trigger) {
+    return lbFindMatches(text, trigger).filter(m => {
+      const b = text[m.start-1] || '', a = text[m.end] || '';
+      if (b==='_'&&a==='_') return false;
+      if (b==='/'&&a==='/') return false;
+      if (b==='-'&&a==='-') return false;
+      if (b==='<'&&a==='>') return false;
+      return true;
+    });
+  }
+  // Use lbFindUnwrapped (not lbFindMatches) so an explicitly wrapped trigger in
+  // the chat text (/x/ -x- <x>) isn't counted as a direct reference either —
+  // consistent with cascade. (Underscore wraps are already handled in
+  // lbFindMatches, which treats `_` as a word character.)
+  function lbDirectHits(message, entry) {
+    return (entry.keys||[]).filter(k=>lbFindUnwrapped(message,k.keyText).length>0).map(k=>k.keyText);
+  }
+  function lbCascadeHits(body, target) {
+    return (target.keys||[]).filter(k=>lbFindUnwrapped(body,k.keyText).length>0).map(k=>k.keyText);
+  }
+
+  function lbAnalyze(message, entries) {
+    message = (message||'').replace(/\n{2,}/g,'\n');   // collapse blank lines so the highlight box stays compact
+    const pinnedSet = {};
+    entries.forEach(e => { if (e.pinned) pinnedSet[e.name] = true; });
+    const directMap = {};
+    entries.forEach(e => { const h = lbDirectHits(message, e); if (h.length) directMap[e.name] = h; });
+
+    const cascadeMap = {}, cascadeOriginMap = {}, activated = {}, visited = {};
+    Object.keys(pinnedSet).forEach(n => { activated[n]=true; visited[n]=true; });
+    Object.keys(directMap).forEach(n => { activated[n]=true; visited[n]=true; });
+    const queue = Object.keys(activated).slice();
+    while (queue.length) {
+      const srcName = queue.shift();
+      const src = entries.find(e=>e.name===srcName); if (!src) continue;
+      const body = src.description || '';
+      entries.forEach(tgt => {
+        if (visited[tgt.name]) return;
+        const hits = lbCascadeHits(body, tgt);
+        if (hits.length) {
+          visited[tgt.name]=true; activated[tgt.name]=true;
+          (cascadeMap[tgt.name]=cascadeMap[tgt.name]||[]).push({source:srcName,keys:hits});
+          cascadeOriginMap[tgt.name] = tgt.origin; // Track which slot this entry came from
+          queue.push(tgt.name);
+        }
+      });
+    }
+
+    const activatedList = entries.filter(e=>activated[e.name]).sort((a,b)=>{
+      if (a.pinned&&!b.pinned) return -1;
+      if (!a.pinned&&b.pinned) return 1;
+      return (b.weight||5)-(a.weight||5);
+    });
+
+    let running=0; const included=[], cut=[], tokMap={};
+    activatedList.forEach(e=>{
+      const t = Math.round((e.description||'').length/4);
+      tokMap[e.name]=t;
+      if (running+t<=1500){ running+=t; included.push(e); } else cut.push(e);
+    });
+
+    const hlRanges=[];
+    Object.keys(directMap).forEach(name=>directMap[name].forEach(key=>lbFindMatches(message,key).forEach(m=>hlRanges.push(m))));
+
+    return { message, directMap, cascadeMap, pinnedSet, activatedList, included, cut, tokMap, totalToks:running, hlRanges, cascadeOriginMap };
+  }
+
+  function lbBuildHighlight(text, ranges) {
+    if (!ranges||!ranges.length) return escHTML(text);
+    const sorted = ranges.slice().sort((a,b)=>a.start-b.start||b.end-a.end);
+    const merged = [];
+    sorted.forEach(r=>{ if(!merged.length||r.start>=merged[merged.length-1].end) merged.push(r); });
+    let html='', idx=0;
+    merged.forEach(r=>{ html+=escHTML(text.slice(idx,r.start)); html+='<mark class="djt-lb-hl">'+escHTML(text.slice(r.start,r.end))+'</mark>'; idx=r.end; });
+    html+=escHTML(text.slice(idx));
+    return html;
+  }
+
+  function openLorebookTester() {
+    if (document.getElementById('djt-lb-overlay')) return;
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head">` +
+          `<span class="djt-lb-title">🔍 Message Tester</span>` +
+          `<button id="djt-lb-close" class="djt-lb-x" title="Close">✕</button>` +
+        `</div>` +
+        `<div class="djt-lb-body">` +
+          `<div id="djt-lb-nolb" class="djt-lb-banner warn" style="display:none;margin-bottom:12px">No lorebook loaded yet. Click <b>Load Lorebook</b> first, then come back here.</div>` +
+          `<div class="djt-lb-step">Analyze a message</div>` +
+          `<textarea id="djt-lb-msg" class="djt-lb-ta" placeholder="Type a message, or pull the latest one from this chat..."></textarea>` +
+          `<div class="djt-lb-row">` +
+            `<button id="djt-lb-analyze" class="djt-mini-btn primary">Analyze triggers</button>` +
+            `<button id="djt-lb-grab" class="djt-mini-btn">Use last chat message</button>` +
+          `</div>` +
+          `<div id="djt-lb-results" style="display:none">` +
+            `<div class="djt-lb-sec">Highlighted message</div>` +
+            `<div id="djt-lb-hl" class="djt-lb-hlbox"></div>` +
+            `<div class="djt-lb-sec">Summary</div>` +
+            `<div id="djt-lb-badges" class="djt-lb-badges"></div>` +
+            `<div class="djt-lb-toklabels"><span>Estimated tokens loaded</span><span id="djt-lb-toklabel" class="djt-lb-tokval">~0 / 1500</span></div>` +
+            `<div class="djt-lb-toktrack"><div id="djt-lb-tokbar" class="djt-lb-tokfill" style="width:0%"></div></div>` +
+            `<div id="djt-lb-status"></div>` +
+            `<div class="djt-lb-sec">Activated entries</div>` +
+            `<div id="djt-lb-entries" class="djt-lb-entries"></div>` +
+            `<div class="djt-lb-foot">Estimates are approximate (~1 token / 4 chars). Pinned entries load first, then by weight. This tool shows what's activated. Whether the model used it well is for you to judge.</div>` +
+          `</div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+
+    const close = () => { const o=document.getElementById('djt-lb-overlay'); if(o)o.remove(); };
+    document.getElementById('djt-lb-close').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+    // Load all 4 lorebooks from storage and merge
+    loadAllLorebooks(merged => {
+      if (merged && merged.entries && merged.entries.length) {
+        lbParsed = {entries: merged.entries};
+      } else {
+        const nb = document.getElementById('djt-lb-nolb'); if (nb) nb.style.display = '';
+      }
+    });
+
+    document.getElementById('djt-lb-grab').addEventListener('click', () => {
+      const lb = lastBot();
+      if (lb) { document.getElementById('djt-lb-msg').value = msgText(lb); }
+      else toast('No bot message found in this chat.');
+    });
+
+    document.getElementById('djt-lb-analyze').addEventListener('click', () => {
+      if (!lbParsed) { toast('Load a lorebook first.'); return; }
+      const msg = document.getElementById('djt-lb-msg').value;
+      if (!msg.trim()) { toast('Type or paste a message to analyze.'); return; }
+      lbRenderResults(lbAnalyze(msg, lbParsed.entries));
+      document.getElementById('djt-lb-results').style.display='';
+    });
+  }
+
+  function lbRenderResults(a) {
+    document.getElementById('djt-lb-hl').innerHTML = lbBuildHighlight(a.message, a.hlRanges);
+
+    const nDirect=Object.keys(a.directMap).length, nCascade=Object.keys(a.cascadeMap).length,
+          nPinned=Object.keys(a.pinnedSet).length, nCut=a.cut.length, total=a.activatedList.length;
+    let badges='';
+    if (!total) badges='<span class="djt-lb-badge none">No triggers found</span>';
+    else {
+      if (nDirect)  badges+=`<span class="djt-lb-badge direct">${nDirect} direct</span>`;
+      if (nCascade) badges+=`<span class="djt-lb-badge cascade">${nCascade} cascade</span>`;
+      if (nPinned)  badges+=`<span class="djt-lb-badge pinned">${nPinned} pinned</span>`;
+      if (nCut)     badges+=`<span class="djt-lb-badge cut">${nCut} cut</span>`;
+    }
+    document.getElementById('djt-lb-badges').innerHTML=badges;
+
+    const bar=document.getElementById('djt-lb-tokbar');
+    bar.style.width=Math.min(100,(a.totalToks/1500)*100)+'%';
+    bar.className='djt-lb-tokfill'+(a.totalToks>1500?' over':'');
+    document.getElementById('djt-lb-toklabel').textContent='~'+a.totalToks+' / 1500';
+
+    const st=document.getElementById('djt-lb-status');
+    if (!total) st.innerHTML='<div class="djt-lb-banner info">No entries triggered. Try words matching your trigger keys, or pull a bot message to check cascade.</div>';
+    else if (nCut>0) st.innerHTML=`<div class="djt-lb-banner warn">⚠️ <b>1500 token limit reached.</b> The ${nCut} greyed-out entr${nCut!==1?'ies':'y'} below were estimated as cut, so the model likely didn't have them.</div>`;
+    else st.innerHTML='<div class="djt-lb-banner ok">✓ Under the 1500 token budget. All activated entries should have loaded.</div>';
+
+    const list=document.getElementById('djt-lb-entries'); list.innerHTML='';
+    if (!total){ list.innerHTML='<div class="djt-lb-empty">No entries were triggered.</div>'; return; }
+    a.included.forEach(e=>list.appendChild(lbBuildRow(e,a,false)));
+    if (a.cut.length){
+      const d=document.createElement('div'); d.className='djt-lb-sec'; d.textContent='Cut from context (over budget)';
+      list.appendChild(d);
+      a.cut.forEach(e=>list.appendChild(lbBuildRow(e,a,true)));
+    }
+  }
+
+  function lbBuildRow(entry, a, isCut) {
+    const row=document.createElement('div'); row.className='djt-lb-entry'+(isCut?' cut':'');
+    let how='';
+    if (entry.pinned) how='📌 Pinned, always loaded';
+    else if (a.directMap[entry.name]) how='🎯 Direct, matched: <b>'+escHTML(a.directMap[entry.name].join(', '))+'</b>';
+    else if (a.cascadeMap[entry.name]) {
+      how=a.cascadeMap[entry.name].map(s=>'🔗 Cascade from <b>'+escHTML(s.source)+'</b> via <b>'+escHTML(s.keys.join(', '))+'</b>').join('<br>');
+    }
+    const toks=a.tokMap[entry.name]||0;
+    const meta=[]; if(entry.type)meta.push(entry.type); meta.push('weight '+(entry.weight!=null?entry.weight:5));
+    if(entry.hidden)meta.push('hidden'); if(entry.pinned)meta.push('pinned');
+    const originBadge = entry.origin ? `<span style="color:var(--djt-muted);font-size:9px;font-weight:600;margin-left:6px">[${entry.origin==='bot1'?'Bot 1':entry.origin==='bot2'?'Bot 2':entry.origin==='bot3'?'Bot 3':'Persona'}]</span>` : '';
+    row.innerHTML=
+      `<div><div class="djt-lb-ename">${escHTML(entry.name)}${originBadge}</div>`+
+      `<div class="djt-lb-emeta">${meta.map(escHTML).join(' · ')}</div>`+
+      (how?`<div class="djt-lb-ehow">${how}</div>`:'')+`</div>`+
+      `<div class="djt-lb-etok">~${toks}<small>tok</small></div>`;
+    return row;
+  }
+
+  // ---- ACTIVE CHAT SCANNER (live trigger highlighting) -------
+  // Uses the CSS Custom Highlight API so we never touch the chat DOM -
+  // no React conflicts, and it does NOT retrigger containerObserver.
+  let scanActive = false, scanRegex = null, scanTriggerCount = 0, scanDebounce = null, panelDebounce = null;
+  const SCAN_HL = 'djt-scan';
+  const scanSupported = () => (typeof Highlight !== 'undefined' && window.CSS && CSS.highlights);
+
+  function buildScanRegex(entries) {
+    const set = new Set();
+    (entries || []).forEach(e => (e.keys || []).forEach(k => { if (k.keyText && k.keyText.trim()) set.add(k.keyText.trim()); }));
+    const triggers = [...set].sort((a, b) => b.length - a.length);
+    scanTriggerCount = triggers.length;
+    if (!triggers.length) return null;
+    const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try { return new RegExp('(?<![A-Za-z0-9])(' + triggers.map(esc).join('|') + ')(?![A-Za-z0-9])', 'gi'); }
+    catch (e) { return null; }
+  }
+
+  function runChatScan() {
+    if (!active || !scanActive || !scanRegex || !scanSupported()) return;
+    // Only scan the 4 most recent messages (2 bot, 2 user) - keeps the live scan
+    // focused on what's actually in play instead of painting the whole history.
+    const ms = getMessages();
+    const bots = [], users = [];
+    for (let i = ms.length - 1; i >= 0 && (bots.length < 2 || users.length < 2); i--) {
+      if (isBot(ms[i])) { if (bots.length < 2) bots.push(ms[i]); }
+      else { if (users.length < 2) users.push(ms[i]); }
+    }
+    const roots = [...bots, ...users];
+    if (!roots.length) { CSS.highlights.delete(SCAN_HL); return; }
+    const hl = new Highlight(); let count = 0;
+    roots.forEach(root => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(n) {
+          if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+          const p = n.parentElement;
+          if (p && p.closest('.djt-del-thinking')) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      let node;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue; scanRegex.lastIndex = 0; let m;
+        while ((m = scanRegex.exec(text))) {
+          if (m[0].length === 0) { scanRegex.lastIndex++; continue; }
+          try { const r = document.createRange(); r.setStart(node, m.index); r.setEnd(node, m.index + m[0].length); hl.add(r); count++; } catch (e) {}
+          if (count > 8000) break;
+        }
+        if (count > 8000) break;
+      }
+    });
+    CSS.highlights.set(SCAN_HL, hl);
+  }
+
+  function clearChatScan() { if (scanSupported()) CSS.highlights.delete(SCAN_HL); }
+
+  function loadScanLorebook(cb) {
+    loadAllLorebooks(merged => {
+      if (merged && merged.entries && merged.entries.length) {
+        cb({entries: merged.entries});
+      } else {
+        cb(null);
+      }
+    });
+  }
+
+  function setScanner(on) {
+    if (on) {
+      if (!scanSupported()) { toast('Your browser does not support live highlighting.'); return; }
+      loadScanLorebook(lb => {
+        if (!lb || !Array.isArray(lb.entries) || !lb.entries.length) {
+          toast('Load a lorebook first.');
+          openLoadLorebookModal();
+          return;
+        }
+        scanRegex = buildScanRegex(lb.entries);
+        if (!scanRegex) { toast('No triggers found in that lorebook.'); return; }
+        scanActive = true; settings.scanActive = true; saveSettings();
+        runChatScan(); updateScanBtn();
+        toast('Live scan on: ' + scanTriggerCount + ' triggers.');
+      });
+    } else {
+      scanActive = false; settings.scanActive = false; saveSettings();
+      clearChatScan(); updateScanBtn();
+    }
+  }
+
+  function updateScanBtn() {
+    const b = document.getElementById('djt-scan-btn'); if (!b) return;
+    b.textContent = scanActive ? '🔆 Active Chat Scanner: On' : '🔆 Active Chat Scanner: Off';
+    b.classList.toggle('primary', scanActive);
+  }
+
+  function maybeStartScanner() {
+    if (!settings.scanActive || !scanSupported()) return;
+    loadScanLorebook(lb => {
+      if (lb && Array.isArray(lb.entries) && lb.entries.length) {
+        scanRegex = buildScanRegex(lb.entries);
+        if (scanRegex) { scanActive = true; runChatScan(); updateScanBtn(); }
+      }
+    });
+  }
+
+
+  // ---- LOREBOOK LIBRARY & LOAD MODAL -----------------------
+  function loadLorebookLibrary(cb) {
+    try { chrome.storage.local.get(['djt:lb-library'], d => {
+      cb((d && d['djt:lb-library']) || []);
+    }); } catch (e) { cb([]); }
+  }
+  function saveLorebookLibrary(lib) {
+    try { chrome.storage.local.set({'djt:lb-library': lib}); } catch (e) {}
+  }
+  function saveToLibrary(name, json) {
+    loadLorebookLibrary(lib => {
+      lib.push({name, json, dateAdded: Date.now()});
+      saveLorebookLibrary(lib);
+    });
+  }
+  function deleteFromLibrary(idx) {
+    loadLorebookLibrary(lib => {
+      lib.splice(idx, 1);
+      saveLorebookLibrary(lib);
+    });
+  }
+
+  function openLoadLorebookModal() {
+    if (document.getElementById('djt-lb-overlay')) return;
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal" style="max-width:700px">` +
+        `<div class="djt-lb-head">` +
+          `<span class="djt-lb-title">📥 Load Lorebooks (4 slots)</span>` +
+          `<button id="djt-load-close" class="djt-lb-x" title="Close">✕</button>` +
+        `</div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-step">Active slots</div>` +
+          `<div id="djt-slots-container" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px"></div>` +
+          `<div class="djt-lb-step">Paste & load into slot</div>` +
+          `<div style="display:flex;gap:8px;margin-bottom:8px">` +
+            `<textarea id="djt-load-ta" class="djt-lb-ta mono" placeholder="Paste your lorebook JSON here..." style="flex:1;min-height:100px"></textarea>` +
+            `<select id="djt-load-slot" style="height:100%;padding:8px;border-radius:4px;border:1px solid var(--djt-border)">` +
+              `<option value="bot1">Bot 1</option>` +
+              `<option value="bot2">Bot 2</option>` +
+              `<option value="bot3">Bot 3</option>` +
+              `<option value="persona">Persona</option>` +
+            `</select>` +
+          `</div>` +
+          `<div class="djt-lb-row">` +
+            `<button id="djt-load-paste-btn" class="djt-mini-btn primary">Load into slot</button>` +
+            `<button id="djt-load-save-btn" class="djt-mini-btn">Save &amp; Load</button>` +
+            `<button id="djt-load-cancel-btn" class="djt-mini-btn">Cancel</button>` +
+          `</div>` +
+          `<div id="djt-load-status" class="djt-lb-msg"></div>` +
+          `<div class="djt-lb-step" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:16px">` +
+            `<span>Library</span>` +
+            `<button id="djt-lib-clear" class="djt-mini-btn ghost" style="padding:3px 10px;font-size:10px;display:none">Clear all</button>` +
+          `</div>` +
+          `<div id="djt-lib-list" class="djt-lb-entries" style="margin-bottom:6px"></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+
+    const close = () => { const o=document.getElementById('djt-lb-overlay'); if(o)o.remove(); };
+    document.getElementById('djt-load-close').addEventListener('click', close);
+    document.getElementById('djt-load-cancel-btn').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+    // Render 4 slot sections
+    const renderSlots = () => {
+      loadAllLorebooks(merged => {
+        try { chrome.storage.local.get([LOREBOOKS_KEY], d => {
+          const data = (d && d[LOREBOOKS_KEY]) || {bot1: null, bot2: null, bot3: null, persona: null};
+          const slotDefs = [
+            {key: 'bot1', label: 'Bot Lorebook 1'},
+            {key: 'bot2', label: 'Bot Lorebook 2'},
+            {key: 'bot3', label: 'Bot Lorebook 3'},
+            {key: 'persona', label: 'Persona Lorebook'}
+          ];
+          let html = '';
+          slotDefs.forEach(slot => {
+            const json = data[slot.key];
+            let display = '(empty)';
+            if (json) {
+              try {
+                const lb = JSON.parse(json);
+                const name = (lb.name && lb.name.trim()) || 'Unnamed';
+                const count = (lb.entries && lb.entries.length) || 0;
+                display = `${escHTML(name)} (${count} entries)`;
+              } catch (e) { display = '(invalid)'; }
+            }
+            html += `
+              <div style="border:1px solid var(--djt-border);border-radius:6px;padding:10px">
+                <div style="font-weight:600;margin-bottom:6px;font-size:11px">${escHTML(slot.label)}</div>
+                <div style="font-size:10px;color:var(--djt-muted);margin-bottom:8px">Currently loaded: <b>${display}</b></div>
+                <div style="display:flex;gap:4px;flex-wrap:wrap">
+                  <button onclick="djt_useFromLib_slot('${slot.key}')" class="djt-mini-btn primary" style="padding:3px 10px;font-size:10px">Use from library</button>
+                  <button onclick="djt_clearSlot('${slot.key}')" class="djt-mini-btn" style="padding:3px 10px;font-size:10px">Clear</button>
+                </div>
+              </div>
+            `;
+          });
+          const container = document.getElementById('djt-slots-container');
+          if (container) container.innerHTML = html;
+        }); } catch(e) {}
+      });
+    };
+    renderSlots();
+
+    const clearAllBtn = document.getElementById('djt-lib-clear');
+    if (clearAllBtn) clearAllBtn.addEventListener('click', () => {
+      if (!confirm('Clear ALL saved lorebooks? This empties your saved library. The currently loaded slots stay intact.')) return;
+      saveLorebookLibrary([]);
+      const list = document.getElementById('djt-lib-list');
+      if (list) list.innerHTML = '<div class="djt-lb-empty">No saved lorebooks yet.</div>';
+      clearAllBtn.style.display = 'none';
+      toast('Saved lorebooks cleared.');
+    });
+
+    loadLorebookLibrary(lib => {
+      const list = document.getElementById('djt-lib-list');
+      if (!list) return;
+      const clearBtn = document.getElementById('djt-lib-clear');
+      if (clearBtn) clearBtn.style.display = lib.length ? '' : 'none';
+      if (lib.length === 0) {
+        list.innerHTML = '<div class="djt-lb-empty">No saved lorebooks yet.</div>';
+      } else {
+        list.innerHTML = lib.map((lb, i) => `
+          <div class="djt-lb-entry" style="grid-template-columns:1fr auto auto;align-items:center">
+            <div>
+              <div class="djt-lb-ename">${escHTML(lb.name)}</div>
+              <div class="djt-lb-emeta">${new Date(lb.dateAdded).toLocaleDateString()}</div>
+            </div>
+            <button onclick="djt_loadFromLib_slot('${document.getElementById('djt-load-slot').value}', ${i})" class="djt-mini-btn primary" style="padding:4px 12px;font-size:11px">Use</button>
+            <button onclick="djt_deleteFromLib(${i})" class="djt-mini-btn" style="padding:4px 9px;font-size:11px" title="Delete">×</button>
+          </div>
+        `).join('');
+      }
+    });
+
+    document.getElementById('djt-load-paste-btn').addEventListener('click', () => {
+      const json = document.getElementById('djt-load-ta').value.trim();
+      const slot = document.getElementById('djt-load-slot').value;
+      let lb; try { lb = JSON.parse(json); } catch (e) { toast('Invalid JSON'); return; }
+      if (!Array.isArray(lb.entries)) { toast('Must have entries array'); return; }
+      saveLorebook(slot, json);
+      toast(`Lorebook loaded into ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)}!`);
+      document.getElementById('djt-load-ta').value = '';
+      scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+      renderSlots();
+    });
+
+    document.getElementById('djt-load-save-btn').addEventListener('click', () => {
+      const name = prompt('Lorebook name:'); if (!name) return;
+      const json = document.getElementById('djt-load-ta').value.trim();
+      const slot = document.getElementById('djt-load-slot').value;
+      let lb; try { lb = JSON.parse(json); } catch (e) { toast('Invalid JSON'); return; }
+      if (!Array.isArray(lb.entries)) { toast('Must have entries array'); return; }
+      saveToLibrary(name, json);
+      saveLorebook(slot, json);
+      toast(`Saved & loaded into ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)}!`);
+      document.getElementById('djt-load-ta').value = '';
+      scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+      renderSlots();
+    });
+
+    window.djt_useFromLib_slot = (slot, idx) => {
+      loadLorebookLibrary(lib => {
+        if (idx !== undefined && !lib[idx]) return;
+        const json = idx !== undefined ? lib[idx].json : null;
+        if (!json) return;
+        saveLorebook(slot, json);
+        const libName = idx !== undefined ? lib[idx].name : 'Unknown';
+        toast(`Loaded "${libName}" into ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)}!`);
+        scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+        renderSlots();
+      });
+    };
+
+    window.djt_clearSlot = (slot) => {
+      if (!confirm(`Clear ${slot === 'persona' ? 'Persona' : 'Bot ' + slot.slice(-1)} lorebook?`)) return;
+      clearLorebook(slot);
+      toast('Slot cleared!');
+      scanRegex = null; scanActive = false; setScanner(false); updateScanBtn();
+      renderSlots();
+    };
+
+    window.djt_deleteFromLib = (i) => {
+      if (!confirm('Delete this lorebook from library?')) return;
+      deleteFromLibrary(i);
+      loadLorebookLibrary(lib => {
+        const list = document.getElementById('djt-lib-list');
+        if (!list) return;
+        if (lib.length === 0) {
+          list.innerHTML = '<div class="djt-lb-empty">No saved lorebooks yet.</div>';
+          const clearBtn = document.getElementById('djt-lib-clear');
+          if (clearBtn) clearBtn.style.display = 'none';
+        } else {
+          list.innerHTML = lib.map((lb, i2) => `
+            <div class="djt-lb-entry" style="grid-template-columns:1fr auto auto;align-items:center">
+              <div>
+                <div class="djt-lb-ename">${escHTML(lb.name)}</div>
+                <div class="djt-lb-emeta">${new Date(lb.dateAdded).toLocaleDateString()}</div>
+              </div>
+              <button onclick="djt_loadFromLib_slot('${document.getElementById('djt-load-slot').value}', ${i2})" class="djt-mini-btn primary" style="padding:4px 12px;font-size:11px">Use</button>
+              <button onclick="djt_deleteFromLib(${i2})" class="djt-mini-btn" style="padding:4px 9px;font-size:11px" title="Delete">×</button>
+            </div>
+          `).join('');
+        }
+      });
+    };
+  }
+
+  function openMessageTester() {
+    openLorebookTester();
+  }
+
+  // Pop out the full Message Tester results for the current recent chat context.
+  function openActiveChatDetails() {
+    openLorebookTester();
+    // openLorebookTester loads the lorebook async; wait a tick then prefill + analyze.
+    setTimeout(() => {
+      const ta = document.getElementById('djt-lb-msg');
+      if (ta) ta.value = recentChatText();
+      const btn = document.getElementById('djt-lb-analyze');
+      if (btn) btn.click();
+    }, 120);
+  }
+
+  // ---- ACTIVE CHAT PANEL (live token tracking) -----
+  let panelActive = false;
+  let panelUpdateTo = null;
+
+  // Combine the last 2 bot + last 2 user messages into one block of context.
+  function recentChatText() {
+    const ms = getMessages();
+    const bots = [], users = [];
+    for (let i = ms.length - 1; i >= 0 && (bots.length < 2 || users.length < 2); i--) {
+      if (isBot(ms[i])) { if (bots.length < 2) bots.push(ms[i]); }
+      else { if (users.length < 2) users.push(ms[i]); }
+    }
+    const picked = [...bots, ...users];
+    return picked.map(m => msgText(m)).filter(Boolean).join('\n');
+  }
+
+  function toggleActiveChatPanel() {
+    const card = document.getElementById('djt-acp-card');
+    if (card.style.display !== 'none') {
+      panelActive = false;
+      card.style.display = 'none';
+      clearTimeout(panelUpdateTo);
+      return;
+    }
+    loadAllLorebooks(merged => {
+      if (!merged || !merged.entries || !merged.entries.length) {
+        toast('Load a lorebook first.');
+        openLoadLorebookModal();
+        return;
+      }
+      panelActive = true;
+      card.style.display = '';
+      updateActiveChatPanel();
+    });
+  }
+
+  function updateActiveChatPanel() {
+    if (!panelActive) return;
+    const card = document.getElementById('djt-acp-card'); if (!card) return;
+    clearTimeout(panelUpdateTo);
+    loadAllLorebooks(merged => {
+      if (!panelActive) return;
+      if (!merged || !merged.entries || !merged.entries.length) return;
+      const text = recentChatText();
+      const a = lbAnalyze(text, merged.entries);
+      const pct = Math.round(Math.min(a.totalToks, 1500) / 15);
+      document.getElementById('djt-acp-toks').textContent = a.totalToks.toLocaleString();
+      document.getElementById('djt-acp-pct').textContent = pct;
+      const bar = document.getElementById('djt-acp-bar');
+      bar.style.width = pct + '%';
+      bar.style.background = a.totalToks > 1500 ? 'var(--djt-danger,#ef4444)' : 'var(--djt-accent)';
+
+      const nDirect = Object.keys(a.directMap).length, nCascade = Object.keys(a.cascadeMap).length,
+            nPinned = Object.keys(a.pinnedSet).length, nCut = a.cut.length;
+      const badge = (txt, bg, fg) => `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:${bg};color:${fg}">${txt}</span>`;
+      let badges = '';
+      if (!a.activatedList.length) badges = badge('No triggers found', 'rgba(255,255,255,0.06)', 'var(--djt-muted)');
+      else {
+        if (nDirect)  badges += badge(nDirect + ' direct', 'rgba(167,139,250,0.15)', '#a78bfa');
+        if (nCascade) badges += badge(nCascade + ' cascade', 'rgba(249,115,22,0.15)', '#f97316');
+        if (nPinned)  badges += badge(nPinned + ' pinned', 'rgba(34,197,94,0.15)', '#22c55e');
+        if (nCut)     badges += badge(nCut + ' cut', 'rgba(239,68,68,0.15)', '#ef4444');
+      }
+      const badgeEl = document.getElementById('djt-acp-badges');
+      if (badgeEl) { badgeEl.innerHTML = badges; badgeEl.style.display='flex'; badgeEl.style.flexWrap='wrap'; badgeEl.style.gap='6px'; }
+
+      const rows = a.included.map(e => {
+        let how = '';
+        const slotName = e.origin || 'unknown';
+        const slotLabel = slotName === 'bot1' ? 'Bot 1' : slotName === 'bot2' ? 'Bot 2' : slotName === 'bot3' ? 'Bot 3' : 'Persona';
+        if (e.pinned) how = '📌 Pinned, always loaded';
+        else if (a.directMap[e.name]) how = '🎯 Direct, matched: <b>' + escHTML(a.directMap[e.name].join(', ')) + '</b>';
+        else if (a.cascadeMap[e.name]) {
+          const cascadeSlot = a.cascadeOriginMap && a.cascadeOriginMap[e.name] ? a.cascadeOriginMap[e.name] : e.origin || 'unknown';
+          const cascadeLabel = cascadeSlot === 'bot1' ? 'Bot 1' : cascadeSlot === 'bot2' ? 'Bot 2' : cascadeSlot === 'bot3' ? 'Bot 3' : 'Persona';
+          how = a.cascadeMap[e.name].map(s => '🔗 Cascade from <b>' + escHTML(s.source) + '</b> (' + cascadeLabel + ') via <b>' + escHTML(s.keys.join(', ')) + '</b>').join('<br>');
+        }
+        return `<div style="padding:5px 7px;background:rgba(167,139,250,0.10);border-left:2px solid var(--djt-accent);border-radius:4px;margin-bottom:4px">` +
+               `<div style="font-size:12px;font-weight:600;color:var(--djt-text)">${escHTML(e.name||'(unnamed)')} <span style="color:var(--djt-muted);font-weight:400;font-size:9px;margin-left:6px">[${slotLabel}]</span> <span style="color:var(--djt-muted);font-weight:400">~${a.tokMap[e.name]} tok</span></div>` +
+               `<div style="font-size:10px;color:var(--djt-soft);line-height:1.5">${how}</div></div>`;
+      }).join('');
+      let cutNote = a.cut.length ? `<div style="font-size:10px;color:var(--djt-danger,#ef4444);margin-top:4px">⚠️ ${a.cut.length} entr${a.cut.length!==1?'ies':'y'} over budget (cut)</div>` : '';
+      document.getElementById('djt-acp-entries').innerHTML =
+        (a.included.length ? rows : '<div style="color:var(--djt-muted);font-size:12px">No entries active in recent messages.</div>') + cutNote;
+
+      panelUpdateTo = setTimeout(updateActiveChatPanel, 30000);
+    });
+  }
+
+  // ---- UI PRIMITIVES -----------------------------------------
+  function toast(msg) { const el=document.createElement('div');el.className='djt-toast';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.classList.add('show'),10);setTimeout(()=>el.remove(),2800); }
+
+  function confirmScrollFirstModal() {
+    return new Promise(resolve => {
+      const ov = document.createElement('div'); ov.className = 'djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+      ov.innerHTML =
+        `<div class="djt-modal">` +
+        `<h2>Scroll to first message first?</h2>` +
+        `<p>You haven't scrolled to the start yet. Scrolling first loads all older messages so the download is complete.</p>` +
+        `<div class="djt-modal-btns">` +
+        `<button class="djt-btn ghost" data-v="cancel">Cancel</button>` +
+        `<button class="djt-btn ghost" data-v="no">No, download now</button>` +
+        `<button class="djt-btn primary" data-v="yes">Yes, scroll first</button>` +
+        `</div></div>`;
+      document.body.appendChild(ov);
+      ov.addEventListener('click', e => {
+        const b = e.target.closest('[data-v]'); if (!b) return;
+        ov.remove(); resolve(b.dataset.v);
+      });
+    });
+  }
+
+  function confirmVerifyFirstModal(firstText) {
+    return new Promise(resolve => {
+      const ov = document.createElement('div'); ov.className = 'djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+      const safe = firstText.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+      ov.innerHTML =
+        `<div class="djt-modal">` +
+        `<h2>Is this the first message?</h2>` +
+        `<p>First message loaded:<br><em>&ldquo;${safe}&rdquo;</em></p>` +
+        `<p class="djt-modal-hint">If not, please check the help section.</p>` +
+        `<div class="djt-modal-btns">` +
+        `<button class="djt-btn ghost" data-v="no">No, try scrolling more</button>` +
+        `<button class="djt-btn primary" data-v="yes">Yes, this is it</button>` +
+        `</div></div>`;
+      document.body.appendChild(ov);
+      ov.addEventListener('click', e => {
+        const b = e.target.closest('[data-v]'); if (!b) return;
+        ov.remove(); resolve(b.dataset.v);
+      });
+    });
+  }
+
+  function confirmDownloadModal(firstText) {
+    return new Promise(resolve => {
+      const ov = document.createElement('div'); ov.className = 'djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+      const safe = firstText.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+      ov.innerHTML =
+        `<div class="djt-modal">` +
+        `<h2>Is this the first message?</h2>` +
+        `<p>First message loaded:<br><em>&ldquo;${safe}&rdquo;</em></p>` +
+        `<p class="djt-modal-hint">If not, please check the help section.</p>` +
+        `<div class="djt-modal-btns">` +
+        `<button class="djt-btn ghost" data-v="cancel">Cancel</button>` +
+        `<button class="djt-btn primary" data-v="yes">Yes, download chat</button>` +
+        `</div></div>`;
+      document.body.appendChild(ov);
+      ov.addEventListener('click', e => {
+        const b = e.target.closest('[data-v]'); if (!b) return;
+        ov.remove(); resolve(b.dataset.v);
+      });
+    });
+  }
+
+  // ---- DRAGGABLE PANEL ---------------------------------------
+  const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // Keep the whole panel inside the viewport (call after expand / size change).
+  function clampPanelIntoView(panel) {
+    if (!panel.style.left || panel.style.left === 'auto') return;
+    const left = clampNum(parseInt(panel.style.left) || 0, 0, Math.max(0, window.innerWidth  - panel.offsetWidth));
+    const top  = clampNum(parseInt(panel.style.top)  || 0, 0, Math.max(0, window.innerHeight - 44));
+    panel.style.left = left + 'px';
+    panel.style.top  = top + 'px';
+  }
+
+  function initDrag(panel) {
+    const head = document.getElementById('djt-head');
+    let dragging = false, dragMoved = false, ox = 0, oy = 0, startX = 0, startY = 0;
+    const THRESH = 4;   // px of movement before it counts as a drag (vs a click)
+
+    const toAbsolute = () => {
+      if (panel.style.left && panel.style.left !== 'auto') return;
+      const r = panel.getBoundingClientRect();
+      panel.style.right = 'auto';
+      panel.style.left = r.left + 'px';
+      panel.style.top  = r.top  + 'px';
+    };
+    const getClient = e => e.touches ? [e.touches[0].clientX, e.touches[0].clientY] : [e.clientX, e.clientY];
+
+    const onDown = e => {
+      const collapsed = panel.classList.contains('djt-collapsed');
+      if (!collapsed && e.target.closest('button')) return;
+      if (e.target.closest('#djt-resize')) return;   // resize handle has its own handler
+      toAbsolute();
+      dragging = true; dragMoved = false;
+      const [cx, cy] = getClient(e);
+      startX = cx; startY = cy;
+      ox = cx - parseInt(panel.style.left);
+      oy = cy - parseInt(panel.style.top);
+      if (!collapsed) head.style.cursor = 'grabbing';
+      // Always preventDefault: stops the browser's native image-drag on the sun icon
+      // (which was causing the collapsed bubble to "stick" to the cursor). Expand on
+      // tap is handled manually in onUp, so suppressing the synthetic click is fine.
+      e.preventDefault();
+    };
+    const onMove = e => {
+      if (!dragging) return;
+      const [cx, cy] = getClient(e);
+      if (!dragMoved && Math.abs(cx - startX) < THRESH && Math.abs(cy - startY) < THRESH) return;
+      dragMoved = true;
+      panel.classList.add('djt-no-anim');
+      panel.style.left = clampNum(cx - ox, 0, window.innerWidth  - panel.offsetWidth)  + 'px';
+      panel.style.top  = clampNum(cy - oy, 0, window.innerHeight - 44) + 'px';
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      panel.classList.remove('djt-no-anim');
+      // A real drag (reposition) fires a synthetic click afterwards; flag it so the
+      // panel's click-to-expand fallback doesn't treat the reposition as a tap.
+      if (dragMoved) { panelDragMoved = true; setTimeout(() => { panelDragMoved = false; }, 200); }
+      const collapsed = panel.classList.contains('djt-collapsed');
+      if (!dragMoved && collapsed) {
+        // Tap (no real movement) on the sun bubble - expand the panel, then make
+        // sure the now-wider panel doesn't spill off the right/bottom edge.
+        panel.classList.remove('djt-collapsed');
+        head.style.cursor = 'grab';
+        toAbsolute();
+        requestAnimationFrame(() => clampPanelIntoView(panel));
+        settings.panelPos = { left: panel.style.left, top: panel.style.top };
+        saveSettings();
+        return;
+      }
+      if (!collapsed) head.style.cursor = 'grab';
+      settings.panelPos = { left: panel.style.left, top: panel.style.top };
+      saveSettings();
+    };
+
+    head.style.cursor = 'grab';
+    head.addEventListener('mousedown', onDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    head.addEventListener('touchstart', onDown, { passive: false });
+    document.addEventListener('touchmove', e => { if (dragging) { e.preventDefault(); onMove(e); } }, { passive: false });
+    document.addEventListener('touchend', onUp);
+  }
+
+  // ---- RESIZABLE PANEL ---------------------------------------
+  function initResize(panel) {
+    const handle = document.getElementById('djt-resize');
+    const body = document.getElementById('djt-body');
+    if (!handle || !body) return;
+    let resizing = false, startX = 0, startY = 0, startW = 0, startBodyH = 0;
+    const getClient = e => e.touches ? [e.touches[0].clientX, e.touches[0].clientY] : [e.clientX, e.clientY];
+
+    const onDown = e => {
+      resizing = true;
+      const [cx, cy] = getClient(e);
+      startX = cx; startY = cy;
+      startW = panel.offsetWidth;
+      startBodyH = body.offsetHeight;
+      panel.classList.add('djt-no-anim');
+      e.preventDefault(); e.stopPropagation();
+    };
+    const onMove = e => {
+      if (!resizing) return;
+      const [cx, cy] = getClient(e);
+      const w = clampNum(startW + (cx - startX), 200, Math.min(520, window.innerWidth - 24));
+      const h = clampNum(startBodyH + (cy - startY), 120, window.innerHeight * 0.85);
+      panel.style.width = w + 'px';
+      body.style.maxHeight = h + 'px';
+      body.style.height = h + 'px';
+    };
+    const onUp = () => {
+      if (!resizing) return;
+      resizing = false;
+      panel.classList.remove('djt-no-anim');
+      settings.panelSize = { width: panel.style.width, bodyHeight: body.style.height };
+      saveSettings();
+      clampPanelIntoView(panel);
+    };
+
+    handle.addEventListener('mousedown', onDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    handle.addEventListener('touchstart', onDown, { passive: false });
+    document.addEventListener('touchmove', e => { if (resizing) { e.preventDefault(); onMove(e); } }, { passive: false });
+    document.addEventListener('touchend', onUp);
+  }
+
+  // ---- PANEL -------------------------------------------------
+  const setTheme = theme => { const p=document.getElementById('djt-panel');if(!p)return;p.setAttribute('data-djt-theme',theme||'dark');const tb=document.getElementById('djt-theme-btn');if(tb)tb.textContent=theme==='light'?'\u{1F319}':'☀️'; };
+  const setSkin = skin => {
+    const p=document.getElementById('djt-panel'); if(!p) return;
+    p.setAttribute('data-djt-skin', skin || 'dreamjourney');
+  };
+
+  const cardH = (label, key) =>
+    `<div class="djt-card-h djt-card-h-btn" data-djt-key="${key}"><span class="djt-card-arrow">▾</span>${label}</div>`;
+
+  const toggleRow = (key, label) =>
+    `<div class="djt-toggle-row"><span>${label}</span><label class="djt-switch"><input type="checkbox" id="djt-t-${key}" checked><span class="djt-slider"></span></label></div>`;
+
+  // ---- QUILL (local-LLM / API writing helper) ----------------
+  const QUILL_STRENGTH_HINTS = {
+    1:'Grammar &amp; spelling only', 2:'Light polish', 3:'Improve flow &amp; clarity',
+    4:'Rewrite, keep my meaning', 5:'Full creative rewrite from a rough note'
+  };
+  const QUILL_PRESETS = [
+    { label:'Keep my voice',        text:'Preserve my personal writing voice and vocabulary. Only elevate clarity and flow.' },
+    { label:'More vivid',           text:'Add sensory detail and stronger verbs, but keep my actions and intent exactly as written.' },
+    { label:"Match the bot's tone", text:"Mirror the tone, register and energy of the bot's last message." },
+    { label:'Tighter',              text:'Make it more concise and economical without losing meaning.' },
+    { label:'Immersive RP',         text:'Write it as immersive first-person roleplay prose in present tense.' }
+  ];
+  const quillState = { strength:2, tone:'none', length:'medium', sumCount:10, pov:'first', tense:'present' };
+  let quillImportFile = null, quillImportBot = null;
+
+  // Round-trip a chat request through the background service worker (the
+  // network boundary that dodges the HTTPS page's mixed-content/CORS block).
+  function quillChat(system, user, opts) {
+    return new Promise(resolve => {
+      let done=false; const finish=r=>{ if(done) return; done=true; resolve(r); };
+      try {
+        chrome.runtime.sendMessage(
+          { type:'quill.chat', cfg:settings.quill, messages:[{role:'system',content:system},{role:'user',content:user}], opts:opts||{} },
+          res => { if(chrome.runtime.lastError){ finish({ok:false,error:chrome.runtime.lastError.message}); return; } finish(res||{ok:false,error:'No response from the Quill worker.'}); }
+        );
+      } catch(e){ finish({ok:false,error:String(e&&e.message||e)}); }
+      setTimeout(()=>finish({ok:false,error:'Timed out waiting for the model (is it still loading?).'}), 120000);
+    });
+  }
+
+  // Strip a single pair of wrapping quotes (straight or curly) some models add.
+  function stripWrapQuotes(s) {
+    s = (s || '').trim();
+    const pairs = [['"','"'], ['“','”'], ["'","'"], ['‘','’']];
+    for (const [a,b] of pairs) { if (s.length > 1 && s[0]===a && s[s.length-1]===b) { return s.slice(1,-1).trim(); } }
+    return s;
+  }
+
+  function quillImproveSystem(strength, tone, length, persona, pov, tense) {
+    const asName = (pov === 'third') ? 'them (third person)' : 'the user (first person)';
+    const personaLine = (persona && persona.trim())
+      ? `You are writing AS this character: ${persona.trim()} Stay true to their voice, personality, knowledge and perspective at all times.`
+      : '';
+    const povLine = (pov === 'third')
+      ? 'Write in the THIRD person (he/she/they) — refer to the user by their persona name or an appropriate pronoun, never "I".'
+      : 'Write in the FIRST person as the user ("I").';
+    const tenseLine = (tense === 'past') ? 'Write in the PAST tense.' : 'Write in the PRESENT tense.';
+    const rules = {
+      1:'Make ONLY minimal corrections: spelling, punctuation and obvious grammar. Keep the wording, length and style essentially identical.',
+      2:"Lightly polish grammar and phrasing for readability. Keep the user's wording and length close to the original.",
+      3:'Improve flow, clarity and word choice. You may restructure sentences, but keep the same events, length and intent.',
+      4:'Rewrite the message into stronger prose while preserving every action, intent and fact the user stated. Do not add new events.',
+      5:'Fully rewrite the user\'s rough note into a polished, vivid but ACCURATE short paragraph. Expand only on what the user implied (for example "I go and sit down" may become a richer description of them sitting down) without inventing new plot, new characters, locations, or outcomes the user did not state.'
+    };
+    const toneLine = (tone && tone!=='none') ? `Write in a ${tone} tone.` : '';
+    const lenLine = { short:'Keep it short, roughly 1-2 sentences.', medium:'Keep it to a short paragraph.', long:'A fuller paragraph is fine, but do not pad it out.' }[length] || '';
+    return [
+      'You are Quill, a writing assistant embedded in a roleplay chat tool. You improve the USER\'s own message before they send it.',
+      personaLine,
+      povLine, tenseLine,
+      rules[strength] || rules[2], toneLine, lenLine,
+      `Hard rules: keep the message about ${asName}. NEVER write dialogue or actions for the bot or any other character. NEVER answer the message or continue the scene. NEVER add plot points, locations, or outcomes the user did not state or clearly imply.`,
+      'Output ONLY the improved message text: no preamble, no surrounding quotation marks, no explanation, no alternatives.'
+    ].filter(Boolean).join(' ');
+  }
+
+  function quillSummarizeSystem() {
+    return [
+      'You are Quill, a writing assistant embedded in a roleplay chat tool.',
+      'Summarize the conversation transcript the user provides into clear, concise KEY BULLET POINTS.',
+      'Capture important events, decisions, character states and relationships, locations, and any unresolved threads, in rough chronological order.',
+      'Be strictly factual to the transcript. Do NOT invent details, do NOT speculate, and do NOT continue the story.',
+      'Output ONLY a bulleted list using "- " for each point. No preamble and no closing remarks.'
+    ].join(' ');
+  }
+
+  function quillReviewSystem() {
+    return [
+      'You are Quill, an analytical writing assistant embedded in a character-creation tool. A creator is worried their character behaves wrongly. Your job is to examine the character files like an editor, NOT to take the creator\'s word for it.',
+      'CRITICAL — do not show bias toward the creator. Do NOT simply agree that the problem exists or flatter them. Read the actual text and judge it on its own terms. If the wording does not support their complaint, say so plainly.',
+      'Look for wording that a language model might MISINTERPRET or over-weight, even if a human reads it fine. Watch for loaded or ambiguous words, repetition that over-emphasises a trait, instructions that pull harder than intended, or traits stated in one section but contradicted in another. (For example, words like "routine" and "schedule" can nudge a model toward number/measurement obsession when the creator only meant the character is habit-driven.) Explain WHY each flagged phrase could be read the way it is.',
+      'If you find no clear issue, or the issue you find is minor and may not explain what the creator is seeing, say so honestly. Then encourage them to test properly before changing the files: try a different system prompt, different settings, and especially a DIFFERENT MODEL. Explain the logic: if the same problem appears across several models and settings, it IS likely the character files (its "guts") need tweaking; if it only happens on one model or setting, then finding the right model/setting will help far more than rewriting the character.',
+      'HARD RULE — you NEVER rewrite the character\'s files for them. You may pinpoint phrases and suggest the KIND of change to consider, but you do not produce rewritten descriptions, instructions, or a finished bot. If the creator asks you to "just rewrite it", gently decline and encourage them to make the change themselves — creating a character is a human craft and the creator understands their intent best.',
+      'Be critical of model output in general: remind them that models can misread good writing, so a flagged phrase is a hypothesis to test, not a proven fault. Be constructive and encouraging, never harsh.',
+      'Structure your answer with short clear sections, e.g. "What I checked", "Phrases worth a look (and why)", and "If this isn\'t it — how to test". Keep it focused and practical.'
+    ].join(' ');
+  }
+
+  function setQuillCreatorStatus(msg, kind) {
+    const el=document.getElementById('djt-quill-creator-status'); if(!el) return;
+    el.textContent=msg||''; el.className='djt-quill-status'+(kind?' '+kind:'');
+  }
+
+  // Pull the character "guts" from the bot form via the page bridge, trimmed
+  // for a local model's context window.
+  function quillBotGutsText(bot) {
+    const cap=(s,n)=>{ s=(s==null?'':String(s)).trim(); return s.length>n ? s.slice(0,n)+' …[truncated]' : s; };
+    const parts=[];
+    if(bot.name) parts.push('[NAME]: '+cap(bot.name,120));
+    if(bot.introduction) parts.push('[INTRODUCTION / FIRST MESSAGE]:\n"""'+cap(bot.introduction,1500)+'"""');
+    if(bot.description) parts.push('[DESCRIPTION / PERSONA]:\n"""'+cap(bot.description,3500)+'"""');
+    if(bot.instructions) parts.push('[INSTRUCTIONS]:\n"""'+cap(bot.instructions,2500)+'"""');
+    if(bot.context) parts.push('[CONTEXT]:\n"""'+cap(bot.context,1500)+'"""');
+    if(bot.examples) parts.push('[EXAMPLE DIALOGUE]:\n"""'+cap(bot.examples,2000)+'"""');
+    if(bot.authorNote) parts.push('[AUTHOR NOTE]:\n"""'+cap(bot.authorNote,1000)+'"""');
+    return parts.join('\n\n');
+  }
+
+  // Build a plain-text transcript of the last N messages (or all) for summarizing.
+  function quillTranscript(n, fromStart) {
+    const ms = getMessages();
+    const slice = fromStart ? ms : ms.slice(Math.max(0, ms.length - n));
+    return slice.map(el => (isBot(el) ? 'BOT: ' : 'USER: ') + msgText(el)).filter(s => s.length > 5).join('\n\n');
+  }
+
+  function quillEnabled() { return !!(settings.quill && settings.quill.enabled); }
+
+  function setQuillStatus(msg, kind) {
+    const el = document.getElementById('djt-quill-status'); if(!el) return;
+    el.textContent = msg || ''; el.className = 'djt-quill-status' + (kind ? ' '+kind : '');
+  }
+
+  function refreshQuillUI() {
+    const on = quillEnabled();
+    [['djt-quill-chat-off','djt-quill-chat-main'], ['djt-quill-creator-off','djt-quill-creator-main'], ['djt-quill-import-off','djt-quill-import-main']].forEach(pair => {
+      const off=document.getElementById(pair[0]); const main=document.getElementById(pair[1]);
+      if (off && main) { off.style.display = on ? 'none' : ''; main.style.display = on ? '' : 'none'; }
+    });
+  }
+
+  function updateQuillCC() {
+    const ta=document.getElementById('djt-quill-custom'); const cc=document.getElementById('djt-quill-cc');
+    if(ta&&cc) cc.textContent=(ta.value||'').length+'/500';
+  }
+  function updateQuillPCC() {
+    const ta=document.getElementById('djt-quill-persona'); const cc=document.getElementById('djt-quill-pcc');
+    if(ta&&cc) cc.textContent=(ta.value||'').length+'/500';
+  }
+  function quillBindCopy(btnId, textId) {
+    const b=document.getElementById(btnId); if(!b) return;
+    b.addEventListener('click', ()=>{ const t=document.getElementById(textId); if(!t||!t.textContent) return; try{ navigator.clipboard.writeText(t.textContent); toast('Copied.'); }catch(e){ toast('Copy failed.'); } });
+  }
+
+  function wireQuillChat() {
+    const seg=(id,onPick)=>{ const wrap=document.getElementById(id); if(!wrap) return; wrap.addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; [...wrap.querySelectorAll('button')].forEach(x=>x.classList.toggle('on', x===b)); onPick(b.dataset.v); }); };
+    seg('djt-quill-strength', v=>{ quillState.strength=+v; const h=document.getElementById('djt-quill-strength-hint'); if(h) h.innerHTML=QUILL_STRENGTH_HINTS[v]||''; });
+    seg('djt-quill-tone',     v=>{ quillState.tone=v; });
+    seg('djt-quill-length',   v=>{ quillState.length=v; });
+    seg('djt-quill-pov',      v=>{ quillState.pov=v; });
+    seg('djt-quill-tense',    v=>{ quillState.tense=v; });
+    seg('djt-quill-sumcount', v=>{ quillState.sumCount=+v; });
+
+    const presetSel=document.getElementById('djt-quill-preset');
+    if(presetSel){
+      QUILL_PRESETS.forEach((p,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=p.label; presetSel.appendChild(o); });
+      presetSel.addEventListener('change', ()=>{ if(presetSel.value==='') return; const ta=document.getElementById('djt-quill-custom'); if(ta){ ta.value=QUILL_PRESETS[+presetSel.value].text; updateQuillCC(); } presetSel.value=''; });
+    }
+    const custom=document.getElementById('djt-quill-custom'); if(custom) custom.addEventListener('input', updateQuillCC);
+
+    // Persona: load from the per-session store, save back as the user types.
+    const persona=document.getElementById('djt-quill-persona');
+    if(persona){
+      persona.value=store.quillPersona||'';
+      updateQuillPCC();
+      persona.addEventListener('input', ()=>{ updateQuillPCC(); store.quillPersona=(persona.value||'').slice(0,500); saveStore(); });
+    }
+
+    const improveBtn=document.getElementById('djt-quill-improve'); if(improveBtn) improveBtn.addEventListener('click', runQuillImprove);
+    const useBtn=document.getElementById('djt-quill-use'); if(useBtn) useBtn.addEventListener('click', ()=>{ const ta=document.querySelector('textarea[placeholder="Send your message..."]'); const t=document.getElementById('djt-quill-out-text'); if(ta&&t){ setReactValue(ta,t.textContent); ta.focus(); toast('Applied to your message box.'); } else { toast('Could not find the chat box.'); } });
+    quillBindCopy('djt-quill-copy','djt-quill-out-text');
+    const redoBtn=document.getElementById('djt-quill-redo'); if(redoBtn) redoBtn.addEventListener('click', runQuillImprove);
+    const cancelBtn=document.getElementById('djt-quill-cancel'); if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-out'); if(o) o.style.display='none'; });
+
+    const sumBtn=document.getElementById('djt-quill-summarize'); if(sumBtn) sumBtn.addEventListener('click', runQuillSummarize);
+    quillBindCopy('djt-quill-sum-copy','djt-quill-sum-text');
+    const sumDl=document.getElementById('djt-quill-sum-dl'); if(sumDl) sumDl.addEventListener('click', downloadQuillSummary);
+    const sumCancel=document.getElementById('djt-quill-sum-cancel'); if(sumCancel) sumCancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-sum-out'); if(o) o.style.display='none'; });
+  }
+
+  async function runQuillImprove() {
+    if(!quillEnabled()){ setQuillStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const ta=document.querySelector('textarea[placeholder="Send your message..."]');
+    const draft=ta?(ta.value||'').trim():'';
+    if(!draft){ setQuillStatus('Type a message in the chat box first.','bad'); return; }
+    const lb=lastBot(); const lastBotText=lb?msgText(lb):'';
+    const customEl=document.getElementById('djt-quill-custom'); const custom=customEl?(customEl.value||'').trim():'';
+    const sys=quillImproveSystem(quillState.strength, quillState.tone, quillState.length, store.quillPersona, quillState.pov, quillState.tense);
+    const ctx = lastBotText ? `For context, the bot's last message was:\n"""${lastBotText.slice(0,1600)}"""\n\n` : '';
+    const extra = custom ? `Extra instruction from me: ${custom}\n\n` : '';
+    const user = `${ctx}${extra}Here is my draft message to improve:\n"""${draft}"""`;
+    const maxTokens = {short:200,medium:450,long:800}[quillState.length]||450;
+    const btn=document.getElementById('djt-quill-improve');
+    if(btn){ btn.disabled=true; btn.textContent='Quill is writing…'; }
+    setQuillStatus('Asking '+(settings.quill.backend)+'…','busy');
+    const res=await quillChat(sys,user,{temperature:0.7,maxTokens});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#9997; Improve my message'; }
+    if(!res.ok){ setQuillStatus('Quill error: '+res.error,'bad'); return; }
+    setQuillStatus('');
+    const out=document.getElementById('djt-quill-out'); const t=document.getElementById('djt-quill-out-text');
+    if(t) t.textContent=stripWrapQuotes(res.text); if(out) out.style.display='';
+  }
+
+  async function runQuillSummarize() {
+    if(!quillEnabled()){ setQuillStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const fromStart=!!(document.getElementById('djt-quill-fromstart')||{}).checked;
+    if(fromStart){
+      const ok=await djtConfirm('Summarize from the start?', 'When summarizing large chats, the output will be entirely dependent on the size and context window of the model you have attached to Quill. Very long chats may be truncated or lose detail.');
+      if(!ok) return;
+      // Load the whole history first (DJ virtualizes older messages out of the DOM,
+      // so without this "from the start" would only see the loaded window). Reuses
+      // the pulse loader; scroll back to the bottom afterwards.
+      const sc=getContainer();
+      if(sc){
+        const btn0=document.getElementById('djt-quill-summarize'); if(btn0){ btn0.disabled=true; btn0.textContent='Loading full chat…'; }
+        setQuillStatus('Loading the full chat into view…','busy');
+        try { await scrollToTop(sc); } catch(e){}
+        sc.scrollTop = sc.scrollHeight;
+      }
+    }
+    const transcript=quillTranscript(quillState.sumCount, fromStart);
+    if(!transcript){ setQuillStatus('No messages to summarize yet.','bad'); return; }
+    const sys=quillSummarizeSystem();
+    const user='Transcript to summarize:\n\n'+transcript;
+    const maxTokens = fromStart ? 1200 : Math.min(1000, 250 + quillState.sumCount*40);
+    const btn=document.getElementById('djt-quill-summarize');
+    if(btn){ btn.disabled=true; btn.textContent='Quill is reading…'; }
+    setQuillStatus('Summarizing…','busy');
+    const res=await quillChat(sys,user,{temperature:0.3,maxTokens});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#128221; Summarize'; }
+    if(!res.ok){ setQuillStatus('Quill error: '+res.error,'bad'); return; }
+    setQuillStatus('');
+    const out=document.getElementById('djt-quill-sum-out'); const t=document.getElementById('djt-quill-sum-text');
+    if(t) t.textContent=(res.text||'').trim(); if(out) out.style.display='';
+  }
+
+  function downloadQuillSummary() {
+    const t=document.getElementById('djt-quill-sum-text'); if(!t||!t.textContent.trim()) return;
+    const header='Chat summary by Quill - Aster\nSession: '+(currentSessionId||'')+'\n'+''.padEnd(42,'-')+'\n\n';
+    const blob=new Blob([header+t.textContent], {type:'text/plain'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download='djt-summary-'+String(currentSessionId||'chat').slice(0,8)+'.txt'; a.click(); URL.revokeObjectURL(url);
+    toast('Summary saved.');
+  }
+
+  function wireQuillCreator() {
+    const concern=document.getElementById('djt-quill-concern');
+    if(concern) concern.addEventListener('input', ()=>{ const cc=document.getElementById('djt-quill-ccc'); if(cc) cc.textContent=(concern.value||'').length+'/500'; });
+    const btn=document.getElementById('djt-quill-review'); if(btn) btn.addEventListener('click', runQuillReview);
+    quillBindCopy('djt-quill-review-copy','djt-quill-review-text');
+    const cancel=document.getElementById('djt-quill-review-cancel'); if(cancel) cancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-quill-review-out'); if(o) o.style.display='none'; });
+  }
+
+  async function runQuillReview() {
+    if(!quillEnabled()){ setQuillCreatorStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    const concernEl=document.getElementById('djt-quill-concern');
+    const concern=concernEl?(concernEl.value||'').trim():'';
+    if(!concern){ setQuillCreatorStatus('Describe what your character is doing first.','bad'); return; }
+    if(!isBotPage()){ setQuillCreatorStatus('Open a bot create or edit page so Quill can read the files.','bad'); return; }
+    const btn=document.getElementById('djt-quill-review');
+    if(btn){ btn.disabled=true; btn.textContent='Reading the form…'; }
+    setQuillCreatorStatus('Reading your character files…','busy');
+    const det=await botGuard();
+    if(!det){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('Could not read the bot form (see the prompt to switch to Legacy).','bad'); return; }
+    const res=await bridgeRequest('export');
+    if(!res||res.error||!res.bot){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('Could not read the character files.','bad'); return; }
+    const guts=quillBotGutsText(res.bot);
+    if(!guts){ if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; } setQuillCreatorStatus('The character files look empty — fill them in first.','bad'); return; }
+    const sys=quillReviewSystem();
+    const user=`The creator describes this concern about their character's behaviour:\n"""${concern}"""\n\nHere are the character's files to analyse:\n\n${guts}`;
+    if(btn){ btn.textContent='Quill is analysing…'; }
+    setQuillCreatorStatus('Analysing with '+(settings.quill.backend)+'…','busy');
+    const out=await quillChat(sys,user,{temperature:0.4,maxTokens:900});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#128269; Analyse my character'; }
+    if(!out.ok){ setQuillCreatorStatus('Quill error: '+out.error,'bad'); return; }
+    setQuillCreatorStatus('');
+    const o=document.getElementById('djt-quill-review-out'); const t=document.getElementById('djt-quill-review-text');
+    if(t) t.textContent=(out.text||'').trim(); if(o) o.style.display='';
+  }
+
+  // ---- QUILL IMPORT (cards from elsewhere -> DJ template) ----
+  function setQuillImportStatus(msg, kind) {
+    const el=document.getElementById('djt-quill-import-status'); if(!el) return;
+    el.textContent=msg||''; el.className='djt-quill-status'+(kind?' '+kind:'');
+  }
+
+  // Read tEXt / iTXt chunks out of a PNG ArrayBuffer (SillyTavern cards embed
+  // the character JSON, base64, under keyword "chara" or "ccv3").
+  function extractPngTextChunks(buf) {
+    const bytes=new Uint8Array(buf); const dv=new DataView(buf);
+    const sig=[137,80,78,71,13,10,26,10];
+    for(let i=0;i<8;i++){ if(bytes[i]!==sig[i]) return null; }
+    const td=new TextDecoder('latin1'); const out={}; let off=8;
+    while(off+8<=bytes.length){
+      const len=dv.getUint32(off); off+=4;
+      const type=td.decode(bytes.subarray(off,off+4)); off+=4;
+      if(off+len>bytes.length) break;
+      const data=bytes.subarray(off,off+len);
+      if(type==='tEXt'){ const z=data.indexOf(0); if(z>=0) out[td.decode(data.subarray(0,z))]=td.decode(data.subarray(z+1)); }
+      else if(type==='iTXt'){ const z=data.indexOf(0); if(z>=0){ const kw=td.decode(data.subarray(0,z)); const compFlag=data[z+1]; let p=z+3; const z2=data.indexOf(0,p); p=z2+1; const z3=data.indexOf(0,p); p=z3+1; if(compFlag===0) out[kw]=td.decode(data.subarray(p)); } }
+      off+=len+4; // data + CRC
+      if(type==='IEND') break;
+    }
+    return out;
+  }
+  function decodeCharaText(b64) {
+    try { const bin=atob(String(b64).trim()); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); return JSON.parse(new TextDecoder('utf-8').decode(bytes)); }
+    catch(e){ return null; }
+  }
+  const qiCap=(s,n)=>{ s=(s==null?'':String(s)).trim(); return s.length>n ? s.slice(0,n)+' …[truncated]' : s; };
+  function cardName(card){ const d=(card&&card.data&&typeof card.data==='object')?card.data:card; return (d&&d.name)?String(d.name):''; }
+  function looksLikeCard(obj){ const d=(obj&&obj.data&&typeof obj.data==='object')?obj.data:obj; return !!(d && (d.first_mes!=null || d.mes_example!=null || (d.name!=null && d.description!=null))); }
+  function cardToSource(card){
+    const d=(card&&card.data&&typeof card.data==='object')?card.data:card; const g=k=>(d&&d[k]!=null)?String(d[k]):'';
+    const parts=[];
+    if(g('name')) parts.push('[NAME]: '+qiCap(g('name'),120));
+    if(g('description')) parts.push('[DESCRIPTION]:\n'+qiCap(g('description'),4000));
+    if(g('personality')) parts.push('[PERSONALITY]:\n'+qiCap(g('personality'),2000));
+    if(g('scenario')) parts.push('[SCENARIO]:\n'+qiCap(g('scenario'),1500));
+    if(g('first_mes')) parts.push('[FIRST MESSAGE / GREETING]:\n'+qiCap(g('first_mes'),2000));
+    if(g('mes_example')) parts.push('[EXAMPLE MESSAGES]:\n'+qiCap(g('mes_example'),2500));
+    if(g('system_prompt')) parts.push('[SYSTEM PROMPT]:\n'+qiCap(g('system_prompt'),2000));
+    if(g('post_history_instructions')) parts.push('[POST-HISTORY INSTRUCTIONS]:\n'+qiCap(g('post_history_instructions'),1500));
+    if(g('creator_notes')) parts.push('[CREATOR NOTES]:\n'+qiCap(g('creator_notes'),800));
+    if(Array.isArray(d.alternate_greetings)&&d.alternate_greetings.length) parts.push('[ALTERNATE GREETINGS]:\n'+qiCap(d.alternate_greetings.join('\n---\n'),1500));
+    return parts.join('\n\n');
+  }
+  function parseImportFile(file){
+    return new Promise((resolve,reject)=>{
+      const name=(file.name||'').toLowerCase();
+      const isPng=name.endsWith('.png')||name.endsWith('.webp')||file.type==='image/png';
+      const reader=new FileReader();
+      reader.onerror=()=>reject(new Error('Could not read the file.'));
+      if(isPng){
+        reader.onload=()=>{ const chunks=extractPngTextChunks(reader.result); if(!chunks) return reject(new Error('That image is not a readable PNG card.')); const raw=chunks['ccv3']||chunks['chara']; if(!raw) return reject(new Error('No character data embedded in this image (is it a card?).')); const card=decodeCharaText(raw); if(!card) return reject(new Error('The embedded character data could not be decoded.')); resolve({source:cardToSource(card),name:cardName(card)}); };
+        reader.readAsArrayBuffer(file);
+      } else {
+        reader.onload=()=>{ const text=String(reader.result||''); let obj=null; try{ obj=JSON.parse(text); }catch(e){} if(obj&&looksLikeCard(obj)) resolve({source:cardToSource(obj),name:cardName(obj)}); else if(obj) resolve({source:'[RAW JSON]\n'+qiCap(text,6000),name:''}); else resolve({source:qiCap(text,6000),name:''}); };
+        reader.readAsText(file);
+      }
+    });
+  }
+  function quillImportSystem(){
+    return [
+      "You are Quill, helping a creator move a character from another site into DreamJourney's bot format.",
+      "You are given the character's data (often from a SillyTavern card, sometimes freeform text). REHOME the content into DreamJourney's fields. Preserve the original wording, voice and details. Do not invent new traits and do not rewrite the character's style; only reorganise, and lightly merge where two sources describe the same thing.",
+      'Output STRICT JSON ONLY — no markdown fences, no commentary, no text before or after. Use exactly these string keys:',
+      '"name" (the character name), "introduction" (the opening greeting shown to the user, from the first message), "description" (the full character description, persona and personality merged into one sheet), "context" (the scene/scenario the roleplay starts in), "instructions" (behavioural/system instructions for how the character should act), "examples" (example dialogue/messages), "authorNote" (any post-history or extra notes, otherwise empty).',
+      'If a field has no source content, use an empty string. Keep {{char}} and {{user}} placeholders exactly as written. Return only the JSON object.'
+    ].join(' ');
+  }
+  function parseQuillBotJson(text){
+    if(!text) return null; let t=String(text).trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+    const a=t.indexOf('{'), b=t.lastIndexOf('}'); if(a<0||b<0||b<a) return null;
+    let obj=null; try{ obj=JSON.parse(t.slice(a,b+1)); }catch(e){ return null; }
+    if(!obj||typeof obj!=='object') return null;
+    const keys=['name','introduction','description','context','instructions','examples','authorNote']; const bot={}; let any=false;
+    keys.forEach(k=>{ if(obj[k]!=null){ bot[k]=String(obj[k]); if(bot[k].trim()) any=true; } });
+    return any?bot:null;
+  }
+  function quillImportRender(bot){
+    const labels={name:'Name',introduction:'Introduction',description:'Description',context:'Context',instructions:'Instructions',examples:'Examples',authorNote:'Author note'};
+    const p=document.getElementById('djt-qi-preview'); if(!p) return; p.textContent='';
+    Object.keys(labels).forEach(k=>{ if(bot[k]&&bot[k].trim()){ const h=document.createElement('div'); h.style.cssText='font-weight:700;color:var(--djt-accent);margin-top:6px'; h.textContent=labels[k]; const v=document.createElement('div'); v.style.cssText='white-space:pre-wrap;margin-bottom:4px'; v.textContent=bot[k].length>500?bot[k].slice(0,500)+' …':bot[k]; p.appendChild(h); p.appendChild(v); } });
+    const o=document.getElementById('djt-qi-out'); if(o) o.style.display='';
+    const ab=document.getElementById('djt-qi-apply'); if(ab) ab.style.display=isBotPage()?'':'none';
+  }
+  async function runQuillImport(){
+    if(!quillEnabled()){ setQuillImportStatus('Turn Quill on in the Settings window first.','bad'); return; }
+    if(!quillImportFile){ setQuillImportStatus('Choose a file first.','bad'); return; }
+    const btn=document.getElementById('djt-qi-run'); if(btn){ btn.disabled=true; btn.textContent='Reading file…'; }
+    setQuillImportStatus('Reading the file…','busy');
+    let parsed; try{ parsed=await parseImportFile(quillImportFile); }
+    catch(e){ if(btn){btn.disabled=false;btn.innerHTML='&#9997; Reorganise with Quill';} setQuillImportStatus(String(e&&e.message||e),'bad'); return; }
+    if(!parsed.source){ if(btn){btn.disabled=false;btn.innerHTML='&#9997; Reorganise with Quill';} setQuillImportStatus('No readable character content in that file.','bad'); return; }
+    if(btn){ btn.textContent='Quill is reorganising…'; } setQuillImportStatus('Reorganising with '+(settings.quill.backend)+'…','busy');
+    const out=await quillChat(quillImportSystem(), 'Character source to convert:\n\n'+parsed.source, {temperature:0.2,maxTokens:1600,json:true});
+    if(btn){ btn.disabled=false; btn.innerHTML='&#9997; Reorganise with Quill'; }
+    if(!out.ok){ setQuillImportStatus('Quill error: '+out.error,'bad'); return; }
+    const bot=parseQuillBotJson(out.text);
+    if(!bot){ setQuillImportStatus('Quill did not return valid bot JSON — try again, or use a larger model.','bad'); const o=document.getElementById('djt-qi-out'); const p=document.getElementById('djt-qi-preview'); if(p) p.textContent=(out.text||'').slice(0,1500); if(o) o.style.display=''; quillImportBot=null; return; }
+    if(!bot.name && parsed.name) bot.name=parsed.name;
+    quillImportBot=bot; setQuillImportStatus(''); quillImportRender(bot);
+  }
+  function downloadQuillImport(){
+    if(!quillImportBot){ toast('Nothing to download yet.'); return; }
+    const json=botEnvelope(quillImportBot); const blob=new Blob([json],{type:'application/json'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    const nm=(quillImportBot.name||'bot').replace(/[^\w\-]+/g,'_').slice(0,40)||'bot';
+    a.href=url; a.download='djt-import-'+nm+'.json'; a.click(); URL.revokeObjectURL(url);
+    toast('Saved. Use Import bot to load it onto a bot page.');
+  }
+  async function applyQuillImport(){
+    if(!quillImportBot){ return; }
+    if(!isBotPage()){ setQuillImportStatus('Open a bot create/edit page to apply directly.','bad'); return; }
+    const det=await botGuard(); if(!det) return;
+    const res=await bridgeRequest('import', quillImportBot);
+    if(!res||res.error){ setQuillImportStatus('Apply failed: '+((res&&res.error)||'unknown'),'bad'); return; }
+    toast('Applied to the bot form — review every field before saving.');
+    setQuillImportStatus('Applied. Please review the form before saving.','');
+  }
+  function wireQuillImport(){
+    const file=document.getElementById('djt-qi-file'); const choose=document.getElementById('djt-qi-choose');
+    if(choose&&file) choose.addEventListener('click', ()=>file.click());
+    if(file) file.addEventListener('change', ()=>{ quillImportFile=(file.files&&file.files[0])||null; const fn=document.getElementById('djt-qi-filename'); if(fn) fn.textContent=quillImportFile?('Selected: '+quillImportFile.name):'No file chosen.'; });
+    const run=document.getElementById('djt-qi-run'); if(run) run.addEventListener('click', runQuillImport);
+    const dl=document.getElementById('djt-qi-download'); if(dl) dl.addEventListener('click', downloadQuillImport);
+    const ap=document.getElementById('djt-qi-apply'); if(ap) ap.addEventListener('click', applyQuillImport);
+    quillBindCopy('djt-qi-copy','djt-qi-preview');
+    const cancel=document.getElementById('djt-qi-cancel'); if(cancel) cancel.addEventListener('click', ()=>{ const o=document.getElementById('djt-qi-out'); if(o) o.style.display='none'; });
+  }
+
+  // Generic yes/no confirm using the toolkit's themed modal.
+  function djtConfirm(title, body) {
+    return new Promise(resolve => {
+      const ov=document.createElement('div'); ov.className='djt-modal-overlay';
+      ov.setAttribute('data-djt-theme', settings.theme||'dark'); ov.setAttribute('data-djt-skin', settings.skin||'dreamjourney');
+      const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const safe=esc(body), safeTitle=esc(title);
+      ov.innerHTML=`<div class="djt-modal"><h2>${safeTitle}</h2><p class="djt-modal-hint">${safe}</p><div class="djt-modal-btns"><button class="djt-btn ghost" data-v="cancel">Cancel</button><button class="djt-btn primary" data-v="yes">Continue</button></div></div>`;
+      document.body.appendChild(ov);
+      ov.addEventListener('click', e=>{ const b=e.target.closest('[data-v]'); if(!b) return; ov.remove(); resolve(b.dataset.v==='yes'); });
+    });
+  }
+
+  function buildPanel() {
+    if(document.getElementById('djt-panel')) return;
+    const p = document.createElement('div'); p.id = 'djt-panel';
+    const sunIconUrl = (() => { try { return chrome.runtime.getURL('icons/icon48.png'); } catch(e) { return ''; } })();
+    const studioUrl  = (() => { try { return chrome.runtime.getURL('lorebook-studio.html'); } catch(e) { return '#'; } })();
+
+    p.innerHTML =
+      // HEAD
+      `<div id="djt-head">` +
+        `<img id="djt-sun-icon" src="${sunIconUrl}" alt="☀️" draggable="false" onerror="this.outerHTML='<span id=\\'djt-sun-icon\\' style=\\'font-size:20px;flex-shrink:0\\'>☀️</span>'">` +
+        `<span class="djt-title">Aster</span>` +
+        `<div class="djt-head-btns">` +
+          `<button id="djt-theme-btn" class="djt-icon-btn" title="Toggle light/dark">☀️</button>` +
+          `<button id="djt-collapse" title="Collapse">–</button>` +
+        `</div>` +
+      `</div>` +
+
+      // TAB BAR
+      `<div id="djt-tabs">` +
+        `<button class="djt-tab" data-tab="chat">Chat Tools</button>` +
+        `<button class="djt-tab" data-tab="creator">Creator Tools</button>` +
+      `</div>` +
+
+      // SCROLLABLE BODY
+      `<div id="djt-body">` +
+
+        // ==== CHAT TOOLS TAB ====
+        `<div id="djt-tab-chat" class="djt-tab-pane">` +
+
+          // Features card
+          `<div class="djt-card" id="djt-features-card">` +
+            cardH('⚙️ Features', 'features') +
+            `<div class="djt-card-body">` +
+              toggleRow('saveRegens','Save regenerations') +
+              toggleRow('stats','Session stats') +
+              toggleRow('nexus','Nexus reminder') +
+              toggleRow('scratchpad','User Input Recovery') +
+              toggleRow('autoRefresh','Auto-refresh on Stop') +
+              toggleRow('deleteThinking','Delete thinking <span class="djt-toggle-note">Nyx / Athena only</span>') +
+            `</div>` +
+          `</div>` +
+
+          // Stats card
+          `<div class="djt-card" id="djt-stats-card">` +
+            cardH('📊 Session stats', 'stats') +
+            `<div class="djt-card-body">` +
+              `<div class="djt-row"><span>Your messages</span><b id="djt-s-user">0</b></div>` +
+              `<div class="djt-row"><span>Bot messages</span><b id="djt-s-bot">0</b></div>` +
+              `<div class="djt-row"><span>Total</span><b id="djt-s-total">0</b></div>` +
+              `<div class="djt-row"><span>Rerolls</span><b id="djt-s-rerolls">0</b></div>` +
+              `<div class="djt-nexus-row" id="djt-nexus-section">` +
+                `<div class="djt-nexus-inner"><span title="Messages sent since you last opened the Nexus memory panel">Since last Nexus</span><b id="djt-nexus-val" class="djt-nexus-num green">0</b></div>` +
+                `<div id="djt-nexus-warn" class="djt-nexus-warn">Recommended to check Nexus for accuracy!</div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Navigation card (scroll + download)
+          `<div class="djt-card" id="djt-nav-card">` +
+            cardH('🧭 Navigation', 'nav') +
+            `<div class="djt-card-body">` +
+              `<button id="djt-scroll-top-btn" class="djt-mini-btn full djt-dl-btn" style="margin-bottom:6px">🔝 Scroll to first message</button>` +
+              `<button id="djt-download" class="djt-mini-btn full djt-dl-btn" style="margin-bottom:6px">💾 Download chat (.txt)</button>` +
+              `<button id="djt-scroll-bottom-btn" class="djt-mini-btn full djt-dl-btn">🔽 Back to bottom</button>` +
+            `</div>` +
+          `</div>` +
+
+          // Scratch card
+          `<div class="djt-card" id="djt-scratch-card">` +
+            cardH('📝 User Input Recovery', 'scratch') +
+            `<div class="djt-card-body">` +
+              `<div class="djt-scratch-sub">Unsent draft</div>` +
+              `<div id="djt-scratch-txt" class="djt-scratch-preview djt-muted-text">Nothing saved yet</div>` +
+              `<div class="djt-scratch-btns"><button id="djt-scratch-restore" class="djt-mini-btn">↩️ Restore</button><button id="djt-scratch-clear" class="djt-mini-btn ghost" style="display:none">🧹 Clear</button></div>` +
+              `<div id="djt-hist-section" style="display:none">` +
+                `<div class="djt-hist-divider"></div>` +
+                `<div class="djt-hist-header">` +
+                  `<span class="djt-scratch-sub">Sent history</span>` +
+                  `<div class="djt-hist-ctrl"><button id="djt-hist-prev" class="djt-mini-btn">‹</button><span id="djt-hist-pos" class="djt-hist-pos">1/1 Saved</span><button id="djt-hist-next" class="djt-mini-btn">›</button></div>` +
+                `</div>` +
+                `<div id="djt-hist-preview" class="djt-scratch-preview djt-muted-text"></div>` +
+                `<div class="djt-scratch-btns"><button id="djt-hist-restore" class="djt-mini-btn">↩️ Restore</button><button id="djt-hist-clear" class="djt-mini-btn ghost">🧹 Clear all</button></div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Regen card
+          `<div class="djt-card" id="djt-regen" style="display:none">` +
+            cardH('🔁 Saved replies', 'regen') +
+            `<div class="djt-card-body">` +
+              `<div class="djt-regen-ctrl"><button id="djt-regen-prev" class="djt-mini-btn">‹</button><span id="djt-regen-pos">1 / 1</span><button id="djt-regen-next" class="djt-mini-btn">›</button></div>` +
+              `<div id="djt-regen-preview" class="djt-regen-preview"></div>` +
+              `<div style="display:flex;gap:6px"><button id="djt-regen-use" class="djt-mini-btn full">✅ Use this reply</button><button id="djt-regen-discard" class="djt-mini-btn ghost" title="Discard all saved replies">&#10005;</button></div>` +
+            `</div>` +
+          `</div>` +
+
+          // Rebuild Nexus from Chat card
+          `<div class="djt-card" id="djt-nexustool-card">` +
+            cardH('&#129504; Rebuild Nexus from Chat', 'nexustool') +
+            `<div class="djt-card-body">` +
+              `<div class="djt-tool-note">Replace this chat's Memory Nexus with a clean version distilled from the chat. A backup is saved first.</div>` +
+              `<button id="djt-nexus-open-btn" class="djt-mini-btn full primary" style="margin-top:6px">&#129504; Open Nexus Rebuilder</button>` +
+              `<div id="djt-nexus-note" class="djt-tool-note" style="text-align:center;margin-top:6px"></div>` +
+            `</div>` +
+          `</div>` +
+
+          // Thinking Template Override card
+          `<div class="djt-card" id="djt-thinking-card">` +
+            cardH('&#128173; Thinking Template Override', 'thinking') +
+            `<div class="djt-card-body">` +
+              `<div class="djt-tool-note">Use your own thinking template instead of the bot's, <b>for this chat only</b> — each chat keeps its own, and it loads automatically when you switch chats. Applies while the toggle is on.</div>` +
+              `<div class="djt-toggle-row" style="margin-top:6px"><span>Override for this chat</span><label class="djt-switch"><input type="checkbox" id="djt-think-enabled"><span class="djt-slider"></span></label></div>` +
+              `<textarea id="djt-think-tmpl" class="djt-quill-ta" placeholder="Your thinking template..." style="min-height:120px;margin-top:6px"></textarea>` +
+              `<div style="display:flex;gap:6px;margin-top:6px"><button id="djt-think-sample" class="djt-mini-btn" style="flex:1">✨ Insert sample</button><button id="djt-think-preset-save" class="djt-mini-btn" style="flex:1">&#128190; Save as preset</button></div>` +
+              `<div id="djt-think-save-row" style="display:none;margin-top:6px">` +
+                `<input id="djt-think-preset-name" type="text" maxlength="60" placeholder="Preset name" style="width:100%;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid var(--djt-btn-bdr);background:var(--djt-btn-bg);color:var(--djt-text);font-family:inherit;font-size:12px;outline:none">` +
+                `<div style="display:flex;gap:6px;margin-top:6px"><button id="djt-think-preset-confirm" class="djt-mini-btn primary" style="flex:1">💾 Save</button><button id="djt-think-preset-cancel" class="djt-mini-btn ghost" style="flex:1">✖️ Cancel</button></div>` +
+              `</div>` +
+              `<div id="djt-think-preset-row" style="display:none;margin-top:6px">` +
+                `<select id="djt-think-preset-select" class="djt-quill-select"><option value="">Load a saved preset&hellip;</option></select>` +
+                `<button id="djt-think-preset-del" class="djt-mini-btn ghost full" style="margin-top:6px">&#128465; Delete selected preset</button>` +
+              `</div>` +
+              `<button id="djt-think-clear" class="djt-mini-btn ghost full" style="margin-top:6px">🗑️ Clear for this chat</button>` +
+              `<div id="djt-think-status" class="djt-tool-note" style="margin-top:6px"></div>` +
+            `</div>` +
+          `</div>` +
+
+          // Hide from AI card
+          `<div class="djt-card" id="djt-hidemsg-card">` +
+            cardH('🙈 Hide from AI', 'hidemsg') +
+            `<div class="djt-card-body">` +
+              `<div class="djt-tool-note">Stop the AI seeing one message in <b>this chat</b> (it stays visible to you, until it scrolls out of context). Paste a distinctive sentence or paragraph from the message.</div>` +
+              `<textarea id="djt-hide-ta" class="djt-quill-ta" placeholder="Paste a unique sentence or two from the message to hide..." style="min-height:80px;margin-top:6px"></textarea>` +
+              `<button id="djt-hide-add" class="djt-mini-btn full primary" style="margin-top:6px">🙈 Hide this from the AI</button>` +
+              `<div id="djt-hide-list" style="margin-top:8px"></div>` +
+              `<div id="djt-hide-status" class="djt-tool-note" style="margin-top:6px"></div>` +
+              `<div class="djt-tool-note" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--djt-border);font-size:10px;opacity:0.85"><b>Disclaimer:</b> If the message you want to ignore has changed your nexus, you'll need to remove the related entries manually. This only removes it from your recent context window and visually from your chat. This is best used for bugs like double messages, where it won't mess up the narrative when one is removed. Please use with caution.</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Quill (chat) card
+          `<div class="djt-card" id="djt-quill-chat-card">` +
+            cardH('&#9997; Quill', 'quillchat') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-chat-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-chat-main" style="display:none">` +
+                // Persona (per-session: who Quill writes as)
+                `<div class="djt-quill-lab">Your persona <span class="djt-quill-cc" id="djt-quill-pcc">0/500</span></div>` +
+                `<div class="djt-quill-cap">Who Quill writes as in this chat. Saved to this session.</div>` +
+                `<textarea id="djt-quill-persona" class="djt-quill-ta" maxlength="500" placeholder="e.g. Mara, 28, a sharp-tongued field medic who hides nerves behind dry humour."></textarea>` +
+                `<div class="djt-quill-divider"></div>` +
+                // Improve my message
+                `<div class="djt-quill-sub">Improve my message</div>` +
+                `<div class="djt-quill-cap">Polishes the text in your message box, using the bot's last message as context.</div>` +
+                `<div class="djt-quill-lab">Strength</div>` +
+                `<div class="djt-seg" id="djt-quill-strength">` +
+                  [1,2,3,4,5].map(n=>`<button data-v="${n}"${n===2?' class="on"':''}>${n}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-hint" id="djt-quill-strength-hint">Light polish</div>` +
+                `<div class="djt-quill-lab">Tone</div>` +
+                `<div class="djt-seg djt-seg-wrap" id="djt-quill-tone">` +
+                  [['none','Neutral'],['casual','Casual'],['sarcastic','Sarcastic'],['dark','Dark'],['descriptive','Descriptive']].map(t=>`<button data-v="${t[0]}"${t[0]==='none'?' class="on"':''}>${t[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Length</div>` +
+                `<div class="djt-seg" id="djt-quill-length">` +
+                  [['short','Short'],['medium','Medium'],['long','Long']].map(l=>`<button data-v="${l[0]}"${l[0]==='medium'?' class="on"':''}>${l[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Point of view</div>` +
+                `<div class="djt-seg" id="djt-quill-pov">` +
+                  [['first','First person (I)'],['third','Third person']].map(p=>`<button data-v="${p[0]}"${p[0]==='first'?' class="on"':''}>${p[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Tense</div>` +
+                `<div class="djt-seg" id="djt-quill-tense">` +
+                  [['present','Present'],['past','Past']].map(p=>`<button data-v="${p[0]}"${p[0]==='present'?' class="on"':''}>${p[1]}</button>`).join('') +
+                `</div>` +
+                `<div class="djt-quill-lab">Tell Quill what you want <span class="djt-quill-cc" id="djt-quill-cc">0/500</span></div>` +
+                `<select id="djt-quill-preset" class="djt-quill-select"><option value="">Load a preset…</option></select>` +
+                `<textarea id="djt-quill-custom" class="djt-quill-ta" maxlength="500" placeholder="e.g. keep my voice; add tension; mirror the bot's tone"></textarea>` +
+                `<button id="djt-quill-improve" class="djt-mini-btn full primary">&#9997; Improve my message</button>` +
+                `<div id="djt-quill-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-out-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-use" class="djt-mini-btn">✅ Use this</button><button id="djt-quill-copy" class="djt-mini-btn ghost">📋 Copy</button><button id="djt-quill-redo" class="djt-mini-btn ghost">🔄 Redo</button><button id="djt-quill-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                // Summarize
+                `<div class="djt-quill-divider"></div>` +
+                `<div class="djt-quill-sub">Summarize chat &rarr; bullet points</div>` +
+                `<div class="djt-quill-lab">How many recent messages</div>` +
+                `<div class="djt-seg" id="djt-quill-sumcount">` +
+                  [5,10,15,20].map(n=>`<button data-v="${n}"${n===10?' class="on"':''}>${n}</button>`).join('') +
+                `</div>` +
+                `<label class="djt-quill-check"><input type="checkbox" id="djt-quill-fromstart"> From the start</label>` +
+                `<button id="djt-quill-summarize" class="djt-mini-btn full">&#128221; Summarize</button>` +
+                `<div id="djt-quill-sum-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-sum-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-sum-dl" class="djt-mini-btn">&#11015; Save .txt</button><button id="djt-quill-sum-copy" class="djt-mini-btn ghost">📋 Copy</button><button id="djt-quill-sum-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-status" class="djt-quill-status"></div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
+          `<button id="djt-help-btn" class="djt-help-tab">? How to use this toolkit</button>` +
+
+        `</div>` + // end djt-tab-chat
+
+        // ==== CREATOR TOOLS TAB ====
+        `<div id="djt-tab-creator" class="djt-tab-pane" style="display:none">` +
+
+          // Bot Tools card
+          `<div class="djt-card" id="djt-bottools-card">` +
+            cardH('🤖 Bot Tools', 'bottools') +
+            `<div class="djt-card-body">` +
+              `<button id="djt-bot-export-btn" class="djt-mini-btn full primary" style="margin-bottom:6px">📤 Export bot</button>` +
+              `<button id="djt-bot-import-btn" class="djt-mini-btn full" style="margin-bottom:6px">📥 Import bot</button>` +
+              `<div id="djt-bot-status-line" class="djt-tool-note" style="text-align:center">Open a bot page to auto-back-up.</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Lorebook Tools card
+          `<div class="djt-card" id="djt-lorebook-card">` +
+            cardH('📖 Lorebook Tools', 'lorebook') +
+            `<div class="djt-card-body">` +
+              `<button id="djt-lb-load-btn" class="djt-mini-btn full primary" style="margin-bottom:6px">📥 Load Lorebook</button>` +
+              `<button id="djt-lb-tester-btn" class="djt-mini-btn full" style="margin-bottom:6px">🔍 Message Tester</button>` +
+              `<button id="djt-scan-btn" class="djt-mini-btn full" style="margin-bottom:6px">🔆 Active Chat Scanner: Off</button>` +
+              `<div id="djt-acp-card" style="display:none;margin-top:12px;padding:10px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">` +
+                `<div style="font-size:11px;color:var(--djt-muted);margin-bottom:8px;font-weight:700">LIVE ACTIVITY</div>` +
+                `<div style="font-size:11px;color:var(--djt-soft);margin-bottom:8px">Based on the last 4 messages (2 bot, 2 you).</div>` +
+                `<div id="djt-acp-badges" class="djt-lb-badges" style="margin-bottom:10px"></div>` +
+                `<div style="font-size:11px;color:var(--djt-muted);margin-bottom:6px">Estimated tokens loaded</div>` +
+                `<div style="font-size:16px;font-weight:700;color:var(--djt-accent);margin-bottom:8px"><span id="djt-acp-toks">0</span> / 1500</div>` +
+                `<div style="width:100%;height:6px;background:rgba(0,0,0,0.3);border-radius:3px;overflow:hidden;margin-bottom:8px">` +
+                  `<div id="djt-acp-bar" style="height:100%;width:0%;background:var(--djt-accent);transition:width 0.3s"></div>` +
+                `</div>` +
+                `<div style="font-size:10px;color:var(--djt-muted);margin-bottom:10px"><span id="djt-acp-pct">0</span>% of budget</div>` +
+                `<div style="font-size:11px;color:var(--djt-muted);margin-bottom:4px">Activated entries</div>` +
+                `<div id="djt-acp-entries" style="font-size:12px;color:var(--djt-soft);max-height:160px;overflow-y:auto"></div>` +
+                `<button id="djt-acp-details" class="djt-mini-btn full" style="margin-top:8px">🔎 Full details</button>` +
+              `</div>` +
+              `<button id="djt-panel-toggle-btn" class="djt-mini-btn full" style="margin-top:6px">📊 Active Chat Panel</button>` +
+            `</div>` +
+          `</div>` +
+
+          // Tool Pages card
+          `<div class="djt-card" id="djt-toolpages-card">` +
+            cardH('🧰 Tool Pages', 'toolpages') +
+            `<div class="djt-card-body">` +
+              `<a class="djt-tool-link" href="${studioUrl}" target="_blank">Lorebook Workshop ↗</a>` +
+              `<div class="djt-tool-note">Merge, wrap &amp; unwrap lorebooks, all in one page.</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Quill (creator) card — Character Lens
+          `<div class="djt-card" id="djt-quill-creator-card">` +
+            cardH('&#9997; Quill &middot; Character Lens', 'quillcreator') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-creator-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-creator-main" style="display:none">` +
+                `<div class="djt-quill-cap">An analytical second read of your character's files. On a bot create/edit page, describe what your character is doing wrong and Quill looks for wording a model might misread. It will not rewrite your bot for you.</div>` +
+                `<div class="djt-quill-lab">What's happening with your character? <span class="djt-quill-cc" id="djt-quill-ccc">0/500</span></div>` +
+                `<textarea id="djt-quill-concern" class="djt-quill-ta" maxlength="500" placeholder="e.g. My detective keeps obsessing over numbers and measuring things, when he's meant to be habit-driven, not maths-driven."></textarea>` +
+                `<button id="djt-quill-review" class="djt-mini-btn full primary">&#128269; Analyse my character</button>` +
+                `<div id="djt-quill-review-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-quill-review-text" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-quill-review-copy" class="djt-mini-btn ghost">📋 Copy</button><button id="djt-quill-review-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-creator-status" class="djt-quill-status"></div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
+          // Quill (creator) card — Import a character
+          `<div class="djt-card" id="djt-quill-import-card">` +
+            cardH('&#9997; Quill &middot; Import a character', 'quillimport') +
+            `<div class="djt-card-body">` +
+              `<div id="djt-quill-import-off" class="djt-tool-note" style="text-align:center">Turn on Quill in the Settings window (toolkit button) to use it.</div>` +
+              `<div id="djt-quill-import-main" style="display:none">` +
+                `<div class="djt-quill-cap">Upload a character card (SillyTavern .png / .json) or a plain .txt bot from anywhere. Quill reorganises it into DreamJourney's template so you can import or apply it. It rehomes the content, it does not rewrite your character.</div>` +
+                `<input type="file" id="djt-qi-file" accept=".json,.png,.txt,.webp,application/json,image/png,text/plain" style="display:none">` +
+                `<button id="djt-qi-choose" class="djt-mini-btn full">&#128194; Choose a card or text file</button>` +
+                `<div id="djt-qi-filename" class="djt-quill-cap" style="margin-top:6px">No file chosen.</div>` +
+                `<button id="djt-qi-run" class="djt-mini-btn full primary" style="margin-top:6px">&#9997; Reorganise with Quill</button>` +
+                `<div id="djt-qi-out" class="djt-quill-out" style="display:none">` +
+                  `<div id="djt-qi-preview" class="djt-quill-out-text"></div>` +
+                  `<div class="djt-quill-out-btns"><button id="djt-qi-download" class="djt-mini-btn">&#11015; Download .json</button><button id="djt-qi-apply" class="djt-mini-btn">📥 Apply to bot page</button><button id="djt-qi-copy" class="djt-mini-btn ghost">📋 Copy</button><button id="djt-qi-cancel" class="djt-mini-btn ghost">&#10005;</button></div>` +
+                `</div>` +
+                `<div id="djt-quill-import-status" class="djt-quill-status"></div>` +
+              `</div>` +
+            `</div>` +
+          `</div>` +
+
+          `<button id="djt-creator-help-btn" class="djt-help-tab">? How to use Creator Tools</button>` +
+
+        `</div>` + // end djt-tab-creator
+
+        // ==== SHARED FOOTER (both tabs) ====
+        `<div id="djt-advanced-wrap">` +
+          `<button id="djt-advanced-toggle" class="djt-advanced-toggle">▸ Advanced</button>` +
+          `<div id="djt-advanced-body" style="display:none">` +
+            `<div class="djt-tool-note" style="text-align:center;margin-bottom:8px">Theme options have moved to the Settings window (click the toolkit button in your browser bar).</div>` +
+            `<button id="djt-surprise-btn" class="djt-mini-btn full djt-surprise">&#127800; Surprise me!</button>` +
+          `</div>` +
+        `</div>` +
+        `<div class="djt-credit">Made by SunflowerS at Dreamjourney AI</div>` +
+
+      `</div>` + // end djt-body
+      `<div id="djt-resize" title="Drag to resize"></div>`;
+
+    document.body.appendChild(p);
+
+    // ---- Event listeners ----
+
+    document.getElementById('djt-collapse').addEventListener('click', e => {
+      e.stopPropagation();
+      const panel = document.getElementById('djt-panel');
+      panel.classList.add('djt-collapsed');
+      settings.panelPos = { left: panel.style.left || '', top: panel.style.top || '' };
+      settings.panelCollapsed = true; saveSettings();
+    });
+    // Belt-and-suspenders expand for mobile
+    p.addEventListener('click', () => {
+      if (panelDragMoved) return;   // ignore the synthetic click after a reposition
+      if (p.classList.contains('djt-collapsed')) {
+        p.classList.remove('djt-collapsed');
+        settings.panelCollapsed = false; saveSettings();
+        const h = document.getElementById('djt-head'); if (h) h.style.cursor = 'grab';
+        requestAnimationFrame(() => clampPanelIntoView(p));
+      }
+    });
+
+    document.getElementById('djt-theme-btn').addEventListener('click', () => {
+      settings.theme = settings.theme === 'light' ? 'dark' : 'light';
+      saveSettings(); setTheme(settings.theme);
+    });
+
+    // Tabs
+    [...document.querySelectorAll('#djt-tabs .djt-tab')].forEach(btn => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // Collapsible card headers (delegated on body)
+    document.getElementById('djt-body').addEventListener('click', e => {
+      const h = e.target.closest('.djt-card-h-btn');
+      if (!h || !h.dataset.djtKey) return;
+      toggleCard(h.dataset.djtKey);
+    });
+
+    // Download / scroll buttons
+    document.getElementById('djt-scroll-top-btn').addEventListener('click', doScrollToTop);
+    document.getElementById('djt-download').addEventListener('click', downloadChat);
+    document.getElementById('djt-scroll-bottom-btn').addEventListener('click', scrollToBottom);
+
+    // Help buttons
+    document.getElementById('djt-help-btn').addEventListener('click', () => {
+      try { window.open(chrome.runtime.getURL('help.html'), '_blank'); } catch(e) { toast('Could not open help page.'); }
+    });
+    document.getElementById('djt-creator-help-btn').addEventListener('click', () => {
+      try { window.open(chrome.runtime.getURL('creator-tools-help.html'), '_blank'); } catch(e) { toast('Could not open help page.'); }
+    });
+    document.getElementById('djt-bot-export-btn').addEventListener('click', openBotExport);
+    document.getElementById('djt-bot-import-btn').addEventListener('click', openBotImport);
+    document.getElementById('djt-lb-load-btn').addEventListener('click', openLoadLorebookModal);
+    document.getElementById('djt-lb-tester-btn').addEventListener('click', openMessageTester);
+    document.getElementById('djt-scan-btn').addEventListener('click', () => setScanner(!scanActive));
+    document.getElementById('djt-panel-toggle-btn').addEventListener('click', toggleActiveChatPanel);
+    document.getElementById('djt-acp-details').addEventListener('click', openActiveChatDetails);
+    updateScanBtn();
+
+    // Regen panel
+    document.getElementById('djt-regen-prev').addEventListener('click', () => { previewIndex--; refreshRegenPanel(); });
+    document.getElementById('djt-regen-next').addEventListener('click', () => { previewIndex++; refreshRegenPanel(); });
+    document.getElementById('djt-regen-use').addEventListener('click', () => { const h=store.regenHistory; if(h&&h.versions&&previewIndex!==null) applyVersion(h.versions[previewIndex]); });
+    document.getElementById('djt-regen-discard').addEventListener('click', () => { store.regenHistory={versions:[],current:0}; previewIndex=null; saveStore(); refreshRegenPanel(); });
+
+    // Scratchpad
+    document.getElementById('djt-scratch-restore').addEventListener('click', () => { const ta=document.querySelector('textarea[placeholder="Send your message..."]'); if(ta&&store.scratch){setReactValue(ta,store.scratch);ta.focus();} });
+    document.getElementById('djt-scratch-clear').addEventListener('click', () => { store.scratch=''; saveStore(); refreshScratchUI(); });
+    document.getElementById('djt-hist-prev').addEventListener('click', () => { scratchHistIdx=Math.max(0,scratchHistIdx-1); refreshScratchHistUI(); });
+    document.getElementById('djt-hist-next').addEventListener('click', () => { scratchHistIdx=Math.min((store.scratchHistory||[]).length-1,scratchHistIdx+1); refreshScratchHistUI(); });
+    document.getElementById('djt-hist-restore').addEventListener('click', () => { const ta=document.querySelector('textarea[placeholder="Send your message..."]'); const h=store.scratchHistory||[]; if(ta&&h[scratchHistIdx]){setReactValue(ta,h[scratchHistIdx]);ta.focus();} });
+    document.getElementById('djt-hist-clear').addEventListener('click', () => { store.scratchHistory=[]; scratchHistIdx=0; saveStore(); refreshScratchHistUI(); });
+
+    // Feature toggles
+    ['saveRegens','stats','nexus','scratchpad','autoRefresh','deleteThinking'].forEach(key => {
+      const cb=document.getElementById('djt-t-'+key); if(!cb) return;
+      cb.addEventListener('change', () => { settings[key]=cb.checked; saveSettings(); applyVisibility(); refreshStatsUI(); refreshRegenPanel(); refreshThinkingButtons(); });
+    });
+
+    // Advanced section
+    document.getElementById('djt-advanced-toggle').addEventListener('click', function() {
+      const b=document.getElementById('djt-advanced-body'); const o=b.style.display==='none';
+      b.style.display=o?'':'none'; this.textContent=(o?'▾':'▸')+' Advanced';
+    });
+    document.getElementById('djt-surprise-btn').addEventListener('click', bloomBlossoms);
+
+    // Quill wiring (chat + creator + import)
+    wireQuillChat();
+    wireQuillCreator();
+    wireQuillImport();
+    refreshQuillUI();
+
+    // Nexus rebuilder + thinking-template override + hide-from-AI wiring
+    wireNexusTool();
+    wireThinkingOverride();
+    wireHideFromAI();
+
+    // Draggable + resizable + restore saved position/size
+    initDrag(p);
+    initResize(p);
+    if (settings.panelSize && settings.panelSize.width) {
+      p.style.width = settings.panelSize.width;
+      const body = document.getElementById('djt-body');
+      if (body && settings.panelSize.bodyHeight) { body.style.height = settings.panelSize.bodyHeight; body.style.maxHeight = settings.panelSize.bodyHeight; }
+    }
+    if (settings.panelPos && settings.panelPos.left) {
+      p.style.right = 'auto';
+      p.style.left = settings.panelPos.left;
+      p.style.top  = settings.panelPos.top;
+      requestAnimationFrame(() => clampPanelIntoView(p));
+    }
+    // Start collapsed (smallest form) by default; remembers the user's last choice.
+    if (settings.panelCollapsed) p.classList.add('djt-collapsed');
+  }
+
+  // ---- TABS --------------------------------------------------
+  function switchTab(tab, noSave) {
+    const t = tab || 'chat';
+    if (!noSave) { settings.activeTab = t; saveSettings(); }
+    const chatPane    = document.getElementById('djt-tab-chat');
+    const creatorPane = document.getElementById('djt-tab-creator');
+    if (chatPane)    chatPane.style.display    = t === 'chat'    ? '' : 'none';
+    if (creatorPane) creatorPane.style.display = t === 'creator' ? '' : 'none';
+    [...document.querySelectorAll('#djt-tabs .djt-tab')].forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === t);
+    });
+  }
+
+  // ---- CARD COLLAPSE -----------------------------------------
+  // Cards default to CLOSED: a missing entry means collapsed. Once the user
+  // expands a card we store `false`, so their choice is remembered per card.
+  function isCardCollapsed(key) {
+    const v = settings.cardCollapsed ? settings.cardCollapsed[key] : undefined;
+    return v === undefined ? true : !!v;
+  }
+  function toggleCard(key) {
+    if (!settings.cardCollapsed || typeof settings.cardCollapsed !== 'object') settings.cardCollapsed = {};
+    settings.cardCollapsed[key] = !isCardCollapsed(key);
+    saveSettings();
+    applyCardCollapse(key);
+  }
+  function applyCardCollapse(key) {
+    const h = document.querySelector(`.djt-card-h-btn[data-djt-key="${key}"]`);
+    if (!h) return;
+    const card = h.closest('.djt-card');
+    if (!card) return;
+    const collapsed = isCardCollapsed(key);
+    card.classList.toggle('djt-card-collapsed', collapsed);
+    const arrow = h.querySelector('.djt-card-arrow');
+    if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
+  }
+  function applyAllCardCollapses() {
+    ['features','stats','nav','scratch','regen','nexustool','thinking','hidemsg','quillchat','bottools','lorebook','toolpages','quillcreator','quillimport'].forEach(applyCardCollapse);
+  }
+
+  function syncToggleStates() {
+    ['saveRegens','stats','nexus','scratchpad','autoRefresh','deleteThinking'].forEach(key => {
+      const cb=document.getElementById('djt-t-'+key); if(cb) cb.checked=settings[key]!==false;
+    });
+  }
+  // Sections the user can hide from the pop-out via the Settings window.
+  // key = settings.hidden[key]; also exported (by label) to the popup.
+  const HIDEABLE = [
+    { key:'features',     el:'djt-features-card',      tab:'chat',    label:'Feature toggles' },
+    { key:'stats',        el:'djt-stats-card',         tab:'chat',    label:'Session stats' },
+    { key:'nav',          el:'djt-nav-card',           tab:'chat',    label:'Navigation' },
+    { key:'scratch',      el:'djt-scratch-card',       tab:'chat',    label:'User Input Recovery' },
+    { key:'nexustool',    el:'djt-nexustool-card',     tab:'chat',    label:'Rebuild Nexus from Chat' },
+    { key:'thinking',     el:'djt-thinking-card',      tab:'chat',    label:'Thinking Template Override' },
+    { key:'hidemsg',      el:'djt-hidemsg-card',       tab:'chat',    label:'Hide from AI' },
+    { key:'quillchat',    el:'djt-quill-chat-card',    tab:'chat',    label:'Quill (Chat)' },
+    { key:'bottools',     el:'djt-bottools-card',      tab:'creator', label:'Bot Tools' },
+    { key:'lorebook',     el:'djt-lorebook-card',      tab:'creator', label:'Lorebook Tools' },
+    { key:'toolpages',    el:'djt-toolpages-card',     tab:'creator', label:'Tool Pages' },
+    { key:'quillcreator', el:'djt-quill-creator-card', tab:'creator', label:'Quill (Character Lens)' },
+    { key:'quillimport',  el:'djt-quill-import-card',  tab:'creator', label:'Quill (Import a character)' }
+  ];
+  const isHidden = key => !!(settings.hidden && settings.hidden[key]);
+
+  // Final visibility = feature-enabled AND not user-hidden. Also hides tabs.
+  function applyVisibility() {
+    const show=(id,ok)=>{ const el=document.getElementById(id); if(el) el.style.display = ok ? '' : 'none'; };
+    // feature-gated + hidden-gated
+    show('djt-stats-card', settings.stats && !isHidden('stats'));
+    const nexusSec=document.getElementById('djt-nexus-section'); if(nexusSec) nexusSec.style.display=(settings.stats&&settings.nexus&&!isHidden('stats'))?'':'none';
+    show('djt-scratch-card', settings.scratchpad && !isHidden('scratch'));
+    if(!settings.saveRegens){const regen=document.getElementById('djt-regen');if(regen)regen.style.display='none';}
+    // hidden-gated only
+    show('djt-features-card', !isHidden('features'));
+    show('djt-nav-card', !isHidden('nav'));
+    show('djt-quill-chat-card', !isHidden('quillchat'));
+    show('djt-bottools-card', !isHidden('bottools'));
+    show('djt-nexustool-card', !isHidden('nexustool'));
+    show('djt-thinking-card', !isHidden('thinking'));
+    show('djt-hidemsg-card', !isHidden('hidemsg'));
+    show('djt-lorebook-card', !isHidden('lorebook'));
+    show('djt-toolpages-card', !isHidden('toolpages'));
+    show('djt-quill-creator-card', !isHidden('quillcreator'));
+    show('djt-quill-import-card', !isHidden('quillimport'));
+    // tabs (don't let both be hidden; if the active one is hidden, move over)
+    const chatHidden=isHidden('tab:chat'), creatorHidden=isHidden('tab:creator');
+    const cb=document.querySelector('#djt-tabs .djt-tab[data-tab="chat"]'); if(cb) cb.style.display=chatHidden?'none':'';
+    const rb=document.querySelector('#djt-tabs .djt-tab[data-tab="creator"]'); if(rb) rb.style.display=creatorHidden?'none':'';
+    if(settings.activeTab==='chat' && chatHidden && !creatorHidden) switchTab('creator', true);
+    else if(settings.activeTab==='creator' && creatorHidden && !chatHidden) switchTab('chat', true);
+  }
+
+  // ---- BOT EXPORT / IMPORT (bot create & edit pages) ---------
+  // Bridge lives in the page's MAIN world (dj-bridge.js) so it can reach
+  // react-hook-form. We talk to it over window.postMessage.
+  let bridgeInjected = false;
+  const bridgePending = {};
+  let bridgeReqId = 0;
+  let botAutosaveTimer = null;
+  let botBackupMeta = null; // {ts, botId}
+  let botMode = false;
+  let genericMode = false;   // panel present on a non-session/non-bot DJ page
+  let panelDragMoved = false; // true briefly after a real drag, to suppress the expand-on-click
+
+  function injectBotBridge() {
+    if (bridgeInjected) return;
+    bridgeInjected = true;
+    try {
+      const s = document.createElement('script');
+      s.src = chrome.runtime.getURL('dj-bridge.js');
+      s.onload = () => s.remove();
+      (document.head || document.documentElement).appendChild(s);
+    } catch (e) { bridgeInjected = false; }
+  }
+
+  window.addEventListener('message', ev => {
+    if (ev.source !== window) return;
+    const d = ev.data;
+    if (!d || d.source !== 'djt-bridge') return;
+    if (d.ready) return;
+    const cb = bridgePending[d.reqId];
+    if (cb) { delete bridgePending[d.reqId]; cb(d.result); }
+  });
+
+  function bridgeRequest(action, payload) {
+    return new Promise(resolve => {
+      injectBotBridge();
+      const reqId = ++bridgeReqId;
+      bridgePending[reqId] = resolve;
+      // Give the freshly-injected bridge a beat to register its listener.
+      const send = () => window.postMessage({ source: 'djt-cs', action, payload, reqId }, '*');
+      send(); setTimeout(send, 120);
+      setTimeout(() => { if (bridgePending[reqId]) { delete bridgePending[reqId]; resolve({ error: 'timeout' }); } }, 2500);
+    });
+  }
+
+  // ---- THINKING TEMPLATE OVERRIDE (dj-net.js, MAIN world) -----
+  // A content script can't patch the page's own window.fetch, so dj-net.js does
+  // it in the MAIN world and swaps `thinkingTemplate` on outgoing /api/chat
+  // requests. We inject it on session pages and push the current config; the
+  // patch persists across SPA navigation (config is re-pushed each activate).
+  let netInjected = false;
+  function injectNetBridge() {
+    if (netInjected) return;
+    netInjected = true;
+    try {
+      const s = document.createElement('script');
+      s.src = chrome.runtime.getURL('dj-net.js');
+      s.onload = () => s.remove();
+      s.onerror = () => { netInjected = false; };   // allow a retry on the next activate()
+      (document.head || document.documentElement).appendChild(s);
+    } catch (e) { netInjected = false; }
+  }
+  // Normalize text for tolerant matching (mirror of dj-net.js normMatch).
+  function normalizeForMatch(s) {
+    return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+  function postNetConfig() {
+    try {
+      const tov = settings.thinkingOverride || {};
+      const toMap = {};
+      Object.keys(tov).forEach(sid => {
+        const e = tov[sid];
+        if (e && e.enabled && typeof e.template === 'string' && e.template) toMap[sid] = { enabled: true, template: e.template };
+      });
+      const ce = settings.contextExclusions || {};
+      const exMap = {};
+      Object.keys(ce).forEach(sid => {
+        if (Array.isArray(ce[sid])) {
+          const ns = ce[sid].map(e => e && e.needle).filter(Boolean);
+          if (ns.length) exMap[sid] = ns;
+        }
+      });
+      window.postMessage({
+        source: 'djt-cs-net', type: 'config',
+        config: { thinkingOverrides: toMap, exclusions: exMap }
+      }, location.origin);   // pin origin; read only by our same-origin bridge
+    } catch (e) {}
+  }
+  // dj-net announces readiness; (re)push config so a config sent before it
+  // registered its listener isn't lost.
+  window.addEventListener('message', ev => {
+    if (ev.source !== window) return;
+    const d = ev.data;
+    if (!d || d.source !== 'djt-net') return;
+    if (d.ready) { postNetConfig(); return; }
+    if (d.type === 'exclusionReport' && d.sessionId) {
+      // dj-net tells us, per send, which hidden excerpts were still in the
+      // outgoing context (present=removed) vs. already gone (absent=all clear).
+      const arr = (settings.contextExclusions && settings.contextExclusions[d.sessionId]) || [];
+      let changed = false;
+      arr.forEach(e => {
+        if (d.present && d.present.indexOf(e.needle) !== -1) {
+          if (e.cleared !== false || !e.everMatched) { e.cleared = false; e.everMatched = true; changed = true; }
+        } else if (d.absent && d.absent.indexOf(e.needle) !== -1) {
+          if (e.cleared !== true) { e.cleared = true; changed = true; }
+        }
+      });
+      if (changed) { saveSettings(); if (d.sessionId === currentSessionId) renderHideList(); }
+    }
+  });
+
+  // ---- NEXUS REBUILDER (Memory Nexus replace-all) -------------
+  // Same-origin fetch from the content script: cookie auth, no CSRF token.
+  // Verified live 2026-06-29 (GET/add/delete all 200/201). Delete targets by
+  // entity NAME, so names must be unique; replace-all = delete every current
+  // name, then add the new set. See [[dj-nexus-api]].
+  const NEXUS_TYPES = ['character', 'location', 'object', 'event'];
+  const NEXUS_BACKUP_MAX = 5;   // keep a short ring so a later rebuild can't erase the only good backup
+
+  // The prompt the user pastes into their own LLM (with their chat export) to
+  // produce the clean entity JSON. Generic — contains no real chat/character data.
+  const NEXUS_REWRITE_PROMPT =
+`You are rebuilding the Memory Nexus for a DreamJourney AI roleplay chat. The Nexus is the bot's long-term memory: a set of structured entities (characters, locations, objects, events) injected into the model's context every turn. The automatic Nexus has become bloated, duplicated, and inaccurate, so I'm replacing it wholesale with a clean version distilled from the full chat transcript.
+
+I will give you the complete chat transcript (a DreamJourney / Aster export). Turns alternate between the character (lines starting with the bot's name in brackets, e.g. [CHARACTER NAME]) and me, the user (lines starting with [YOU]). Some bot turns contain a "Thinking Process" block — you may use it for facts but do not treat its meta-language as content.
+
+## Your task
+Read the entire transcript and output a single clean JSON array of memory entities that accurately captures who/what matters and how the story has progressed, in the exact schema below.
+
+## Output schema (each array item)
+\`\`\`json
+{
+  "name": "unique, the entity's canonical name",
+  "type": "character | location | object | event",
+  "description": "one concise sentence",
+  "goal": "current driving goal (characters/factions); null for inanimate things unless meaningful",
+  "state": "short CURRENT status as of the latest point in the chat",
+  "importance": 0,
+  "keypoints": ["durable facts + key developments, newest-state-aware"],
+  "relationships": ["relational links to other entities"]
+}
+\`\`\`
+- type must be lowercase and one of the four values.
+- importance is an integer 1-10 by current narrative centrality.
+- Do not include id or locked — those are assigned automatically.
+
+## Rules (these fix the specific failures of the auto-Nexus)
+1. Only what's in the transcript. No invention, no extrapolation beyond what is written.
+2. Current-state-aware. Keypoints and state reflect the LATEST point in the story. Collapse superseded facts (if a fever broke, don't say "has a fever"). The reader should know where things stand now.
+3. Capture progression. Make event entities for the major plot beats, and write character keypoints so the arc is reconstructable. Accuracy of what happened and in what order is the top priority.
+4. No transient noise. Exclude momentary trivia ("currently eating toast", "sitting on the couch") unless durably significant.
+5. Anti-bloat caps (prefer fewer, higher-signal points; merge redundancies):
+   - Main characters: <= 12 keypoints
+   - Supporting characters: <= 6
+   - Minor characters: <= 3
+   - Locations: <= 4, Objects: <= 3, Events: <= 4
+   No single entity should dominate.
+6. relationships are NOT repeated keypoints. They are concise relational links to other named entities (e.g. "Father of X", "Owned by Y"). Don't restate keypoint facts here.
+7. importance scale: leads 9-10; central allies/rivals & pivotal locations/events 6-8; supporting 4-6; minor/background 1-3.
+8. goal / state: goal = the entity's current primary motivation; state = a short current-situation phrase. For pure locations/objects, goal is usually null and state a brief status.
+9. Unique names. Consolidate. Merge duplicates and over-fragmented entities.
+10. Right-size the set. Include the meaningful cast, places, objects, and events — not every passing mention. Quality over quantity.
+11. Descriptions: one concise sentence each.
+
+## Output format
+Output only the JSON array, inside a single \`\`\`json code block — no preamble, no commentary, nothing after it. Valid JSON, ready to paste into the injector.
+
+### Mini example (style/length reference only — not real data)
+\`\`\`json
+[
+  {
+    "name": "Maya Chen",
+    "type": "character",
+    "description": "A reserved night-shift nurse who moves in next door to the protagonist.",
+    "goal": "Keep her past hidden while slowly letting someone in",
+    "state": "Cautiously opening up after the rooftop conversation",
+    "importance": 10,
+    "keypoints": [
+      "Works night shifts at St. Brigid's; sleeps days",
+      "Fled an unnamed city after a bad relationship",
+      "Initially refused all help, now accepts small gestures",
+      "Agreed to a standing Sunday coffee with the protagonist"
+    ],
+    "relationships": [
+      "Next-door neighbor to the protagonist",
+      "Estranged from her sister Lena"
+    ]
+  },
+  {
+    "name": "The Blackout",
+    "type": "event",
+    "description": "A citywide power outage that trapped the pair in the stairwell for an hour.",
+    "goal": null,
+    "state": "Past — a turning point in their trust",
+    "importance": 7,
+    "keypoints": [
+      "Forced their first honest conversation",
+      "Ended with an unspoken understanding"
+    ],
+    "relationships": ["Involves Maya Chen and the protagonist"]
+  }
+]
+\`\`\`
+
+---
+[Paste or attach the full chat transcript below this line.]`;
+  const nxEsc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const nexusBackupKey = sid => 'djt:nexusbackup:' + sid;
+
+  // Promise wrappers so we can AWAIT (and detect failure of) storage writes
+  // before doing anything destructive.
+  const storageGet = k => new Promise((res, rej) => {
+    try { chrome.storage.local.get([k], d => { const e = chrome.runtime.lastError; if (e) rej(new Error(e.message)); else res(d ? d[k] : undefined); }); }
+    catch (er) { rej(er); }
+  });
+  const storageSet = (k, v) => new Promise((res, rej) => {
+    try { chrome.storage.local.set({ [k]: v }, () => { const e = chrome.runtime.lastError; if (e) rej(new Error(e.message)); else res(); }); }
+    catch (er) { rej(er); }
+  });
+
+  // The nexus READ shape (id/name/description/score/keypoints/relationships/type)
+  // is lossy: it has no goal/state and uses `score` not `importance`. This maps a
+  // backed-up read-shape entity back to the write shape for restore (goal/state
+  // come back empty — they were never readable).
+  function readShapeToWrite(e) {
+    let type = (e && e.type ? String(e.type) : '').toLowerCase().trim();
+    if (!NEXUS_TYPES.includes(type)) type = 'character';
+    let imp = Number(e && (e.importance != null ? e.importance : e.score));
+    if (!isFinite(imp)) imp = 5; else imp = Math.max(1, Math.min(10, Math.round(imp)));
+    return {
+      name: e && e.name != null ? String(e.name) : '',
+      description: e && e.description != null ? String(e.description) : '',
+      goal: e && e.goal != null ? String(e.goal) : '',
+      state: e && e.state != null ? String(e.state) : '',
+      keypoints: Array.isArray(e && e.keypoints) ? e.keypoints.map(x => String(x)) : [],
+      relationships: Array.isArray(e && e.relationships) ? e.relationships.map(x => String(x)) : [],
+      importance: imp, type,
+      locked: !!(e && e.locked)   // preserve each backup entity's lock state so Restore is faithful
+    };
+  }
+
+  async function nexusGet(sid) {
+    const r = await fetch('/api/nexus?sessionId=' + encodeURIComponent(sid), { credentials: 'include' });
+    if (!r.ok) throw new Error('Read failed (HTTP ' + r.status + ')');
+    const j = await r.json();
+    return Array.isArray(j) ? j : ((j && Array.isArray(j.entities)) ? j.entities : []);
+  }
+  async function nexusAdd(sid, entity) {
+    const r = await fetch('/api/nexus/add', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, entity })
+    });
+    if (!r.ok) throw new Error('Add failed (HTTP ' + r.status + ')');
+    return r.json().catch(() => ({}));
+  }
+  async function nexusDelete(sid, entityName) {
+    const r = await fetch('/api/nexus/delete', {
+      method: 'DELETE', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, entityName })
+    });
+    if (!r.ok) throw new Error('Delete failed (HTTP ' + r.status + ')');
+    return r.json().catch(() => ({}));
+  }
+
+  // Validate + coerce pasted JSON into the write shape. Hard errors block the
+  // replace (caller must fix); warnings are applied silently-but-reported.
+  function normalizeNexusEntities(raw) {
+    let arr = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.entities) ? raw.entities : null);
+    if (!arr) throw new Error('JSON must be an array of entities (or an object with an "entities" array).');
+    if (!arr.length) throw new Error('The list is empty. Nothing to inject.');
+    const errors = [], warnings = [], out = [], seen = new Set();
+    arr.forEach((e, i) => {
+      const label = 'Entity #' + (i + 1);
+      if (!e || typeof e !== 'object' || Array.isArray(e)) { errors.push(label + ' is not an object.'); return; }
+      const name = (e.name == null ? '' : String(e.name)).trim();
+      if (!name) { errors.push(label + ' is missing a "name".'); return; }
+      const key = name.toLowerCase();
+      if (seen.has(key)) { errors.push('Duplicate name "' + name + '" (names must be unique).'); return; }
+      seen.add(key);
+      let type = (e.type == null ? '' : String(e.type)).toLowerCase().trim();
+      if (!NEXUS_TYPES.includes(type)) { warnings.push('"' + name + '": unknown type "' + (e.type == null ? '' : e.type) + '", set to "character".'); type = 'character'; }
+      let imp = Number(e.importance != null ? e.importance : e.score);
+      if (!isFinite(imp)) imp = 5; else imp = Math.max(1, Math.min(10, Math.round(imp)));
+      const coerceList = (val, field) => {
+        if (Array.isArray(val)) return val.map(x => String(x).trim()).filter(Boolean);
+        if (typeof val === 'string' && val.trim()) { warnings.push('"' + name + '": ' + field + ' was a string, treated as one item.'); return [val.trim()]; }
+        if (val != null && val !== '') warnings.push('"' + name + '": ' + field + ' was not a list and was dropped.');
+        return [];
+      };
+      const kp = coerceList(e.keypoints, 'keypoints');
+      const rel = coerceList(e.relationships, 'relationships');
+      out.push({
+        name,
+        description: e.description == null ? '' : String(e.description),
+        goal: e.goal == null ? '' : String(e.goal),
+        state: e.state == null ? '' : String(e.state),
+        keypoints: kp, relationships: rel, importance: imp, type
+      });
+    });
+    return { entities: out, errors, warnings };
+  }
+
+  async function runNexusReplace(sid, newEntities, onProgress, lockAll) {
+    const current = await nexusGet(sid);
+    const report = { before: current.length, after: 0, addFail: [], remainingOld: 0 };
+    // Back up the current nexus BEFORE deleting anything. The backup is read-shape
+    // (lossy: no goal/state) but lets the user roll back names/details/links. Keep
+    // a short ring so a second rebuild can't erase the only good backup. If the
+    // backup write fails, ABORT without deleting, so data is never lost silently.
+    if (current.length) {
+      let ring = [];
+      try { const prev = await storageGet(nexusBackupKey(sid)); if (prev && Array.isArray(prev.backups)) ring = prev.backups; } catch (e) {}
+      ring.push({ ts: new Date().toISOString(), entities: current });
+      if (ring.length > NEXUS_BACKUP_MAX) ring = ring.slice(-NEXUS_BACKUP_MAX);
+      try { await storageSet(nexusBackupKey(sid), { backups: ring }); }
+      catch (e) { throw new Error('Backup could not be saved, so nothing was changed (' + (e.message || e) + ').'); }
+    }
+    // Delete all existing by name; multiple passes guard against duplicate names.
+    let cur = current, pass = 0;
+    while (cur.length && pass < 4) {
+      for (let i = 0; i < cur.length; i++) {
+        onProgress && onProgress('Clearing old memories ' + (i + 1) + '/' + cur.length + (pass ? ' (pass ' + (pass + 1) + ')' : '') + '...');
+        try { await nexusDelete(sid, cur[i].name); } catch (e) {}
+      }
+      cur = await nexusGet(sid); pass++;
+    }
+    report.remainingOld = cur.length;
+    // Add the new set.
+    for (let i = 0; i < newEntities.length; i++) {
+      onProgress && onProgress('Adding new memories ' + (i + 1) + '/' + newEntities.length + '...');
+      const ent = lockAll ? Object.assign({}, newEntities[i], { locked: true }) : newEntities[i];
+      try { await nexusAdd(sid, ent); } catch (e) { report.addFail.push(newEntities[i].name); }
+    }
+    const final = await nexusGet(sid);
+    report.after = final.length;
+    return report;
+  }
+
+  function openNexusRebuilder() {
+    if (!currentSessionId) { toast('Open a chat session to rebuild its Nexus.'); return; }
+    if (document.getElementById('djt-lb-overlay')) document.getElementById('djt-lb-overlay').remove();
+    const sid = currentSessionId;
+    const lockAllDefault = settings.nexusLockAll !== false;   // default ON: imported memories come in locked
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.classList.add('djt-glass');   // glassmorphism styling, scoped to the Nexus Rebuilder
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head"><span class="djt-lb-title">&#129504; Rebuild Nexus from Chat</span>` +
+          `<button class="djt-lb-x" id="djt-nx-x" title="Close">&#10005;</button></div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-step">How to rebuild this chat's memory</div>` +
+          `<div style="font-size:12px;line-height:1.55;margin-bottom:10px">` +
+            `<ol style="margin:0 0 0 18px;padding:0">` +
+              `<li>Download this chat: Chat Tools &rarr; <b>Download chat (.txt)</b> (scroll to the first message first so the whole story is included).</li>` +
+              `<li>Open your favourite LLM. Click <b>Copy the LLM prompt</b> below, paste it in, then attach or paste the downloaded chat file.</li>` +
+              `<li>Copy the JSON array the LLM returns and paste it in the box below.</li>` +
+              `<li>Click <b>Preview</b> to check it, then <b>Replace Nexus</b>.</li>` +
+            `</ol>` +
+            `<div style="margin-top:8px;opacity:0.85">Very large chats: if the transcript is bigger than your LLM's context window, split it into chunks, run each through the prompt, then combine the JSON arrays into one list before pasting. The current Nexus is backed up first (names, details &amp; relationships; the API can't read goal/state, so those aren't backed up) &mdash; use <b>Restore a backup</b> to roll back.</div>` +
+          `</div>` +
+          `<button class="djt-mini-btn full primary" id="djt-nx-copyprompt" style="margin-bottom:6px">&#128203; Copy the LLM prompt</button>` +
+          `<textarea id="djt-nx-ta" class="djt-lb-ta mono" placeholder='Paste the JSON array from your LLM here, e.g. [ { "name": "...", "type": "character", "description": "...", "goal": "...", "state": "...", "importance": 5, "keypoints": ["..."], "relationships": ["..."] } ]'></textarea>` +
+          `<label class="djt-nx-lockrow" style="display:flex;align-items:flex-start;gap:7px;font-size:12px;line-height:1.4;margin:2px 0 9px;cursor:pointer">` +
+            `<input type="checkbox" id="djt-nx-lockall"` + (lockAllDefault ? ' checked' : '') + ` style="margin-top:2px;flex:0 0 auto">` +
+            `<span>&#128274; Lock all imported memories <span style="opacity:.72">&mdash; stops DreamJourney's auto-Nexus from changing or deleting them</span></span>` +
+          `</label>` +
+          `<div class="djt-lb-row">` +
+            `<button class="djt-mini-btn" id="djt-nx-preview">Preview</button>` +
+            `<button class="djt-mini-btn primary" id="djt-nx-replace" disabled>Replace Nexus</button>` +
+            `<button class="djt-mini-btn" id="djt-nx-restore">Restore a backup</button>` +
+            `<button class="djt-mini-btn" id="djt-nx-close">Close</button>` +
+          `</div>` +
+          `<div id="djt-nx-status" class="djt-lb-msg" style="display:block"></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    const statusEl = document.getElementById('djt-nx-status');
+    const replaceBtn = document.getElementById('djt-nx-replace');
+    const previewBtn = document.getElementById('djt-nx-preview');
+    const restoreBtn = document.getElementById('djt-nx-restore');
+    let prepared = null;
+    const close = () => ov.remove();
+    document.getElementById('djt-nx-x').addEventListener('click', close);
+    document.getElementById('djt-nx-close').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    const setStatus = (html, cls) => {
+      statusEl.innerHTML = html;
+      statusEl.style.color = cls === 'bad' ? '#e06b6b' : (cls === 'ok' ? '#5cb874' : '');
+    };
+
+    document.getElementById('djt-nx-copyprompt').addEventListener('click', () => {
+      try {
+        navigator.clipboard.writeText(NEXUS_REWRITE_PROMPT).then(
+          () => toast('Prompt copied. Paste it into your LLM, then add your chat export.'),
+          () => setStatus('Copy failed. Your browser blocked clipboard access.', 'bad')
+        );
+      } catch (e) { setStatus('Copy failed. Clipboard not available.', 'bad'); }
+    });
+
+    previewBtn.addEventListener('click', () => {
+      prepared = null; replaceBtn.disabled = true;
+      const txt = document.getElementById('djt-nx-ta').value.trim();
+      if (!txt) { setStatus('Paste a JSON array first.', 'bad'); return; }
+      let raw;
+      try { raw = JSON.parse(txt); } catch (e) { setStatus('Invalid JSON: ' + nxEsc(e.message), 'bad'); return; }
+      let res;
+      try { res = normalizeNexusEntities(raw); } catch (e) { setStatus(nxEsc(e.message), 'bad'); return; }
+      if (res.errors.length) { setStatus('Fix these before replacing:<br>&bull; ' + res.errors.map(nxEsc).join('<br>&bull; '), 'bad'); return; }
+      const byType = {}; res.entities.forEach(e => { byType[e.type] = (byType[e.type] || 0) + 1; });
+      const typeStr = Object.keys(byType).map(t => byType[t] + ' ' + t).join(', ');
+      let html = '<b>' + res.entities.length + ' entities</b> (' + typeStr + ')<br>' + res.entities.map(e => nxEsc(e.name)).join(', ');
+      if (res.warnings.length) html += '<br><br>Notes:<br>&bull; ' + res.warnings.map(nxEsc).join('<br>&bull; ');
+      setStatus(html, 'ok');
+      prepared = res.entities; replaceBtn.disabled = false;
+    });
+
+    replaceBtn.addEventListener('click', async () => {
+      if (!prepared) return;
+      const lockAll = !!(document.getElementById('djt-nx-lockall') || {}).checked;
+      if (settings.nexusLockAll !== lockAll) { settings.nexusLockAll = lockAll; saveSettings(); }
+      const lockNote = lockAll ? ' The new memories will be LOCKED so the auto-Nexus can\'t change or delete them.' : '';
+      if (!(await djtConfirm('Replace Nexus?', 'This will DELETE all current Nexus memories for this chat and replace them with ' + prepared.length + ' new ones. A backup is saved first.' + lockNote))) return;
+      replaceBtn.disabled = true; previewBtn.disabled = true; restoreBtn.disabled = true;
+      let failed = false;
+      try {
+        const report = await runNexusReplace(sid, prepared, msg => setStatus(nxEsc(msg)), lockAll);
+        let html = 'Done. Nexus now has <b>' + report.after + '</b> entities (was ' + report.before + ').';
+        if (report.addFail.length) html += '<br>Failed to add: ' + report.addFail.map(nxEsc).join(', ');
+        if (report.remainingOld) html += '<br>Warning: ' + report.remainingOld + ' old entitie(s) could not be deleted.';
+        failed = !!(report.addFail.length || report.remainingOld);
+        if (failed) html += '<br>Click <b>Replace Nexus</b> again to retry (it is safe to re-run).';
+        setStatus(html, failed ? 'bad' : 'ok');
+      } catch (e) {
+        setStatus('Replace failed: ' + nxEsc(e.message || String(e)), 'bad');
+        failed = true;
+      }
+      previewBtn.disabled = false; restoreBtn.disabled = false;
+      // Re-running a replace is idempotent toward the target set, so let the user
+      // retry directly after a partial/aborted run (prepared is still valid).
+      replaceBtn.disabled = !failed;
+    });
+
+    restoreBtn.addEventListener('click', async () => {
+      let ring = [];
+      try { const prev = await storageGet(nexusBackupKey(sid)); if (prev && Array.isArray(prev.backups)) ring = prev.backups; } catch (e) {}
+      if (!ring.length) { setStatus('No backups saved yet for this chat.', 'bad'); return; }
+      const items = ring.slice().reverse();   // newest first
+      let html = '<b>Backups for this chat</b> (newest first):';
+      items.forEach((b, i) => {
+        let when; try { when = new Date(b.ts).toLocaleString(); } catch (e) { when = String(b.ts); }
+        html += '<div style="margin-top:6px">' + nxEsc(when) + ' &middot; ' + (Array.isArray(b.entities) ? b.entities.length : 0) +
+          ' entities <button class="djt-mini-btn" data-nx-restore="' + i + '" style="margin-left:6px">Restore</button></div>';
+      });
+      setStatus(html);
+      [...statusEl.querySelectorAll('[data-nx-restore]')].forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const b = items[Number(btn.getAttribute('data-nx-restore'))];
+          if (!b || !Array.isArray(b.entities)) return;
+          if (!(await djtConfirm('Restore backup?', 'This will DELETE the current Nexus and replace it with ' + b.entities.length + ' saved entities. goal/state were not captured in backups.'))) return;
+          previewBtn.disabled = true; replaceBtn.disabled = true; restoreBtn.disabled = true;
+          try {
+            const ents = b.entities.map(readShapeToWrite).filter(e => e.name);
+            const report = await runNexusReplace(sid, ents, msg => setStatus(nxEsc(msg)));
+            let r = 'Restored. Nexus now has <b>' + report.after + '</b> entities (was ' + report.before + ').';
+            if (report.addFail.length) r += '<br>Failed to add: ' + report.addFail.map(nxEsc).join(', ');
+            setStatus(r, report.addFail.length ? 'bad' : 'ok');
+          } catch (e) {
+            setStatus('Restore failed: ' + nxEsc(e.message || String(e)), 'bad');
+          }
+          previewBtn.disabled = false; restoreBtn.disabled = false;
+        });
+      });
+    });
+  }
+
+  function wireNexusTool() {
+    const btn = document.getElementById('djt-nexus-open-btn');
+    if (btn) btn.addEventListener('click', openNexusRebuilder);
+    const note = document.getElementById('djt-nexus-note');
+    if (note) note.textContent = currentSessionId ? '' : 'Open a chat session to use this.';
+  }
+
+  // Thinking override is per-session: settings.thinkingOverride[sessionId] = {enabled, template}.
+  function thinkOverrideFor(sid) {
+    if (!settings.thinkingOverride || typeof settings.thinkingOverride !== 'object') settings.thinkingOverride = {};
+    if (!sid) return { enabled: false, template: '' };
+    if (!settings.thinkingOverride[sid] || typeof settings.thinkingOverride[sid] !== 'object') settings.thinkingOverride[sid] = { enabled: false, template: '' };
+    return settings.thinkingOverride[sid];
+  }
+  function updateThinkStatus() {
+    const el = document.getElementById('djt-think-status'); if (!el) return;
+    if (!currentSessionId) { el.textContent = 'Open a chat to set its thinking template.'; return; }
+    const to = thinkOverrideFor(currentSessionId);
+    const len = (to.template || '').length;
+    if (to.enabled && !len) { el.textContent = 'On for this chat, but the template is empty — paste one.'; return; }
+    el.textContent = to.enabled
+      ? ('On for this chat — replaces the bot\'s thinking every reply (' + len + ' chars).')
+      : 'Off for this chat — the bot uses its own thinking template.';
+  }
+  function wireThinkingOverride() {
+    const te = document.getElementById('djt-think-enabled');
+    const tt = document.getElementById('djt-think-tmpl');
+    if (!te || !tt) return;
+    const sid = currentSessionId;
+    const to = sid ? thinkOverrideFor(sid) : { enabled: false, template: '' };
+    te.checked = !!to.enabled;
+    tt.value = typeof to.template === 'string' ? to.template : '';
+    te.disabled = !sid; tt.disabled = !sid;   // only editable inside a chat
+    updateThinkStatus();
+    te.addEventListener('change', () => {
+      if (!currentSessionId) return;
+      thinkOverrideFor(currentSessionId).enabled = te.checked;
+      saveSettings(); postNetConfig(); updateThinkStatus();
+    });
+    let toTimer = null;
+    tt.addEventListener('input', () => {
+      if (!currentSessionId) return;
+      thinkOverrideFor(currentSessionId).template = tt.value;
+      updateThinkStatus();
+      clearTimeout(toTimer);
+      toTimer = setTimeout(() => { saveSettings(); postNetConfig(); }, 300);
+    });
+    const sample = document.getElementById('djt-think-sample');
+    if (sample) sample.addEventListener('click', () => {
+      if (!currentSessionId) return;
+      tt.value = DEFAULT_THINKING_SAMPLE;
+      thinkOverrideFor(currentSessionId).template = tt.value;
+      saveSettings(); postNetConfig(); updateThinkStatus();
+    });
+    const clearBtn = document.getElementById('djt-think-clear');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      if (!currentSessionId) return;
+      settings.thinkingOverride[currentSessionId] = { enabled: false, template: '' };
+      te.checked = false; tt.value = '';
+      saveSettings(); postNetConfig(); updateThinkStatus();
+      const el = document.getElementById('djt-think-status'); if (el) el.textContent = 'Cleared this chat\'s thinking template.';
+    });
+
+    // ---- Preset library (save / load / delete favourite thinking prompts) ----
+    const presets = () => { if (!Array.isArray(settings.thinkingPresets)) settings.thinkingPresets = []; return settings.thinkingPresets; };
+    const sel = document.getElementById('djt-think-preset-select');
+    const presetRow = document.getElementById('djt-think-preset-row');
+    const saveRow = document.getElementById('djt-think-save-row');
+    const nameInput = document.getElementById('djt-think-preset-name');
+    const setMsg = m => { const el = document.getElementById('djt-think-status'); if (el) el.textContent = m; };
+    const renderPresets = () => {
+      if (!sel || !presetRow) return;
+      const ps = presets();
+      sel.innerHTML = '<option value="">Load a saved preset…</option>' + ps.map((p, i) => '<option value="' + i + '">' + nxEsc(p.name) + '</option>').join('');
+      presetRow.style.display = ps.length ? '' : 'none';
+    };
+    renderPresets();
+    const saveBtn = document.getElementById('djt-think-preset-save');
+    if (saveBtn) saveBtn.addEventListener('click', () => {
+      if (!(tt.value || '').trim()) { setMsg('Nothing to save — the template box is empty.'); return; }
+      if (saveRow) saveRow.style.display = saveRow.style.display === 'none' ? '' : 'none';
+      if (nameInput) { nameInput.value = ''; nameInput.focus(); }
+    });
+    const doSavePreset = () => {
+      if (!nameInput) return;
+      const name = (nameInput.value || '').trim();
+      if (!name) { nameInput.focus(); return; }
+      const ps = presets();
+      const existing = ps.find(p => (p.name || '').toLowerCase() === name.toLowerCase());
+      if (existing) existing.template = tt.value; else ps.push({ name: name, template: tt.value });
+      saveSettings(); renderPresets();
+      if (saveRow) saveRow.style.display = 'none';
+      setMsg('Saved preset "' + name + '".');
+    };
+    const confirmBtn = document.getElementById('djt-think-preset-confirm');
+    if (confirmBtn) confirmBtn.addEventListener('click', doSavePreset);
+    if (nameInput) nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doSavePreset(); } });
+    const cancelBtn = document.getElementById('djt-think-preset-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { if (saveRow) saveRow.style.display = 'none'; });
+    if (sel) sel.addEventListener('change', () => {
+      if (!currentSessionId) { setMsg('Open a chat first.'); return; }
+      const idx = parseInt(sel.value, 10);
+      const ps = presets();
+      if (!isNaN(idx) && ps[idx]) {
+        tt.value = ps[idx].template || '';
+        thinkOverrideFor(currentSessionId).template = tt.value;
+        saveSettings(); postNetConfig(); updateThinkStatus();
+      }
+    });
+    const delBtn = document.getElementById('djt-think-preset-del');
+    if (delBtn) delBtn.addEventListener('click', () => {
+      if (!sel) return;
+      const idx = parseInt(sel.value, 10);
+      const ps = presets();
+      if (!isNaN(idx) && ps[idx]) { const nm = ps[idx].name; ps.splice(idx, 1); saveSettings(); renderPresets(); setMsg('Deleted preset "' + nm + '".'); }
+    });
+  }
+
+  // ---- HIDE FROM AI (per-chat outgoing-message exclusions) ----
+  function hideExclusionsFor(sid) {
+    if (!settings.contextExclusions || typeof settings.contextExclusions !== 'object') settings.contextExclusions = {};
+    if (!sid) return [];
+    if (!Array.isArray(settings.contextExclusions[sid])) settings.contextExclusions[sid] = [];
+    return settings.contextExclusions[sid];
+  }
+  function renderHideList() {
+    const list = document.getElementById('djt-hide-list'); if (!list) return;
+    if (!currentSessionId) { list.innerHTML = '<div class="djt-tool-note" style="text-align:center">Open a chat to manage hidden messages.</div>'; applyHideStyling(); return; }
+    const arr = hideExclusionsFor(currentSessionId);
+    if (!arr.length) { list.innerHTML = '<div class="djt-tool-note" style="text-align:center">Nothing hidden in this chat.</div>'; applyHideStyling(); return; }
+    list.innerHTML = arr.map((e, i) => {
+      let status;
+      if (e.cleared === true && e.everMatched)
+        status = '<div class="djt-tool-note" style="margin:2px 0 0;color:#5cb874">✅ All clear! This message has been pushed from the context and is no longer included for Aster to remove.</div>';
+      else if (e.cleared === true)
+        status = '<div class="djt-tool-note" style="margin:2px 0 0;color:#e0a13a">⚠️ Not matched in the latest send — check the excerpt is copied from the message (or it may already be out of context).</div>';
+      else if (e.cleared === false)
+        status = '<div class="djt-tool-note" style="margin:2px 0 0">Active — stripped from the AI\'s context on every message in this chat.</div>';
+      else
+        status = '<div class="djt-tool-note" style="margin:2px 0 0">Will apply on your next message in this chat.</div>';
+      return '<div style="margin-bottom:8px">' +
+        '<div style="display:flex;gap:6px;align-items:center">' +
+          '<span style="flex:1;font-size:11px;color:var(--djt-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + nxEsc(e.preview || '') + '">🙈 ' + nxEsc(e.preview || '(hidden)') + '</span>' +
+          '<button class="djt-mini-btn ghost" data-hide-rm="' + i + '" style="padding:2px 8px" title="Stop hiding this">✖️</button>' +
+        '</div>' + status +
+      '</div>';
+    }).join('');
+    [...list.querySelectorAll('[data-hide-rm]')].forEach(b => b.addEventListener('click', () => {
+      const idx = Number(b.getAttribute('data-hide-rm'));
+      const a = hideExclusionsFor(currentSessionId);
+      if (a[idx]) { a.splice(idx, 1); saveSettings(); postNetConfig(); renderHideList(); }
+    }));
+    applyHideStyling();
+  }
+  // Grey out the hidden message(s) in the actual chat (class only — attribute
+  // changes don't trip the childList observer; re-applied on the refresh cycle
+  // since React re-renders can strip it).
+  function applyHideStyling() {
+    try {
+      const arr = (currentSessionId && settings.contextExclusions && settings.contextExclusions[currentSessionId]) || [];
+      const needles = arr.map(e => e.needle).filter(Boolean);
+      getMessages().forEach(el => {
+        let t = ''; try { t = normalizeForMatch(msgText(el)); } catch (e) {}
+        el.classList.toggle('djt-ctx-hidden', needles.some(n => n && t.indexOf(n) !== -1));
+      });
+    } catch (e) {}
+  }
+  function wireHideFromAI() {
+    const ta = document.getElementById('djt-hide-ta');
+    const addBtn = document.getElementById('djt-hide-add');
+    const note = document.getElementById('djt-hide-status');
+    const setMsg = m => { if (note) note.textContent = m; };
+    renderHideList();
+    if (!ta || !addBtn) return;
+    addBtn.addEventListener('click', () => {
+      if (!currentSessionId) { setMsg('Open a chat first.'); return; }
+      const raw = (ta.value || '').trim();
+      const needle = normalizeForMatch(raw);
+      if (needle.length < 20) { setMsg('Paste a longer, distinctive excerpt (at least a sentence).'); return; }
+      const arr = hideExclusionsFor(currentSessionId);
+      if (arr.some(e => e.needle === needle)) { setMsg('That excerpt is already hidden.'); return; }
+      arr.push({ needle: needle, preview: raw.replace(/\s+/g, ' ').slice(0, 80) });
+      saveSettings(); postNetConfig(); renderHideList();
+      ta.value = ''; setMsg('Hidden. It leaves the AI\'s context on your next message in this chat.');
+    });
+  }
+
+  // Guard used by both buttons: ensures we're on a usable Legacy bot form.
+  async function botGuard() {
+    if (!isBotPage()) { toast('Open a bot creation or edit page first.'); return null; }
+    const det = await bridgeRequest('detect');
+    if (!det || det.error) { toast('Could not reach the bot form. Reload the page.'); return null; }
+    if (!det.hasForm || !det.legacyReady) { openLegacyPrompt(); return null; }
+    return det;
+  }
+
+  function openLegacyPrompt() {
+    if (document.getElementById('djt-lb-overlay')) return;
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head"><span class="djt-lb-title">⚠️ Switch to Legacy</span>` +
+          `<button class="djt-lb-x" id="djt-bot-x" title="Close">✕</button></div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-msg" style="display:block;font-size:13px;line-height:1.6">` +
+            `Bot export &amp; import only work in <b>Legacy</b> mode, where every field is on one page.<br><br>` +
+            `Flip the <b>Legacy / Modern</b> toggle at the top-right of the bot page to <b>Legacy</b>, then try again.` +
+          `</div>` +
+          `<div class="djt-lb-row"><button class="djt-mini-btn primary" id="djt-bot-ok">Got it</button></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    document.getElementById('djt-bot-x').addEventListener('click', close);
+    document.getElementById('djt-bot-ok').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  }
+
+  function botEnvelope(bot) {
+    return JSON.stringify({
+      _type: 'dreamjourney-bot',
+      _toolkit: "Aster",
+      _exportedAt: new Date().toISOString(),
+      bot
+    }, null, 2);
+  }
+
+  async function openBotExport() {
+    const det = await botGuard(); if (!det) return;
+    const res = await bridgeRequest('export');
+    if (!res || res.error || !res.bot) { toast('Export failed: ' + (res && res.error || 'no data')); return; }
+    const json = botEnvelope(res.bot);
+    const name = (res.bot.name || 'bot').replace(/[^\w\-]+/g, '_').slice(0, 40) || 'bot';
+    if (document.getElementById('djt-lb-overlay')) document.getElementById('djt-lb-overlay').remove();
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head"><span class="djt-lb-title">📤 Export bot</span>` +
+          `<button class="djt-lb-x" id="djt-bot-x" title="Close">✕</button></div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-step">A complete copy of this bot, including dropdowns &amp; toggles.</div>` +
+          `<textarea id="djt-bot-ta" class="djt-lb-ta mono" readonly></textarea>` +
+          `<div class="djt-lb-row">` +
+            `<button class="djt-mini-btn primary" id="djt-bot-copy">Copy</button>` +
+            `<button class="djt-mini-btn" id="djt-bot-dl">Download .json</button>` +
+            `<button class="djt-mini-btn" id="djt-bot-close2">Close</button>` +
+          `</div>` +
+          `<div id="djt-bot-status" class="djt-lb-msg"></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    document.getElementById('djt-bot-ta').value = json;
+    const close = () => ov.remove();
+    document.getElementById('djt-bot-x').addEventListener('click', close);
+    document.getElementById('djt-bot-close2').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    const stat = m => { const s = document.getElementById('djt-bot-status'); if (s) { s.style.display = 'block'; s.textContent = m; } };
+    document.getElementById('djt-bot-copy').addEventListener('click', () => {
+      navigator.clipboard.writeText(json).then(() => stat('Copied to clipboard.'), () => stat('Copy failed.'));
+    });
+    document.getElementById('djt-bot-dl').addEventListener('click', () => {
+      try {
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'djt-bot-' + name + '.json';
+        a.click(); URL.revokeObjectURL(url); stat('Downloaded djt-bot-' + name + '.json');
+      } catch (e) { stat('Download failed.'); }
+    });
+  }
+
+  async function openBotImport() {
+    const det = await botGuard(); if (!det) return;
+    if (document.getElementById('djt-lb-overlay')) document.getElementById('djt-lb-overlay').remove();
+    const ov = document.createElement('div'); ov.id = 'djt-lb-overlay';
+    ov.setAttribute('data-djt-theme', settings.theme || 'dark'); ov.setAttribute('data-djt-skin', settings.skin || 'dreamjourney');
+    ov.innerHTML =
+      `<div class="djt-lb-modal">` +
+        `<div class="djt-lb-head"><span class="djt-lb-title">📥 Import bot</span>` +
+          `<button class="djt-lb-x" id="djt-bot-x" title="Close">✕</button></div>` +
+        `<div class="djt-lb-body">` +
+          `<div class="djt-lb-step">Paste a bot file (or pick one) to fill this page's fields.</div>` +
+          `<input type="file" id="djt-bot-file" accept="application/json,.json" style="margin-bottom:8px;font-size:12px;color:var(--lb-soft)">` +
+          `<textarea id="djt-bot-ta" class="djt-lb-ta mono" placeholder="Paste exported bot JSON here..."></textarea>` +
+          `<div class="djt-lb-row">` +
+            `<button class="djt-mini-btn primary" id="djt-bot-apply">Populate bot</button>` +
+            `<button class="djt-mini-btn" id="djt-bot-close2">Cancel</button>` +
+          `</div>` +
+          `<div id="djt-bot-status" class="djt-lb-msg"></div>` +
+        `</div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    document.getElementById('djt-bot-x').addEventListener('click', close);
+    document.getElementById('djt-bot-close2').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    const stat = (m, err) => { const s = document.getElementById('djt-bot-status'); if (s) { s.style.display = 'block'; s.textContent = m; s.style.color = err ? 'var(--lb-red)' : ''; } };
+    document.getElementById('djt-bot-file').addEventListener('change', e => {
+      const f = e.target.files && e.target.files[0]; if (!f) return;
+      const r = new FileReader(); r.onload = () => { document.getElementById('djt-bot-ta').value = r.result; stat('Loaded ' + f.name + '. Click Populate bot.'); }; r.readAsText(f);
+    });
+    document.getElementById('djt-bot-apply').addEventListener('click', async () => {
+      const raw = document.getElementById('djt-bot-ta').value.trim();
+      if (!raw) { stat('Paste a bot file first.', true); return; }
+      let parsed; try { parsed = JSON.parse(raw); } catch (e) { stat('Invalid JSON: ' + e.message, true); return; }
+      const bot = (parsed && parsed.bot && typeof parsed.bot === 'object') ? parsed.bot : parsed;
+      if (!bot || typeof bot !== 'object' || (!bot.name && !bot.instructions && !bot.description)) {
+        stat('That does not look like a bot export.', true); return;
+      }
+      stat('Populating...');
+      const res = await bridgeRequest('import', bot);
+      if (!res || res.error) { stat('Import failed: ' + (res && res.error || 'unknown'), true); return; }
+      const n = (res.applied || []).length;
+      const hasImg = bot.img_link ? ' The image link was set; if the page still asks for an image, re-pick it manually.' : '';
+      stat('✓ Filled ' + n + ' field' + (n === 1 ? '' : 's') + '.' + hasImg);
+      toast('Bot fields populated (' + n + ').');
+    });
+  }
+
+  // Rolling local backup while editing, so work is never lost mid-create.
+  function startBotAutosave() {
+    stopBotAutosave();
+    const tick = async () => {
+      if (!isBotPage()) return;
+      const det = await bridgeRequest('detect');
+      if (!det || !det.hasForm || !det.legacyReady) { updateBotStatus('legacy'); return; }
+      const res = await bridgeRequest('export');
+      if (res && res.bot) {
+        const botId = botIdFromUrl();
+        botBackupMeta = { ts: Date.now(), botId };
+        try { chrome.storage.local.set({ ['djt:botbackup:' + botId]: { ts: botBackupMeta.ts, bot: res.bot } }); } catch (e) {}
+        updateBotStatus('ok');
+      }
+    };
+    tick();
+    botAutosaveTimer = setInterval(tick, 5000);
+  }
+  function stopBotAutosave() { if (botAutosaveTimer) { clearInterval(botAutosaveTimer); botAutosaveTimer = null; } }
+
+  function updateBotStatus(state) {
+    const el = document.getElementById('djt-bot-status-line'); if (!el) return;
+    if (state === 'legacy') { el.textContent = 'Switch to Legacy mode to back up.'; el.style.color = 'var(--djt-orange)'; }
+    else if (state === 'ok' && botBackupMeta) {
+      const t = new Date(botBackupMeta.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      el.textContent = 'Backed up locally ✓ ' + t; el.style.color = 'var(--djt-green)';
+    } else if (state === 'offpage') { el.textContent = 'Open a bot page to auto-back-up.'; el.style.color = 'var(--djt-muted)'; }
+  }
+
+
+  // ---- LIFECYCLE --------------------------------------------
+  async function activate(sid) {
+    currentSessionId=sid; active=true; botMode=false; genericMode=false; hasScrolledToTop=false;
+    await loadAll();
+    const c=await waitFor(()=>document.querySelector('.scrollchatmessages'),20000,250);
+    if(!active||currentSessionId!==sid) return; if(!c) return;
+    buildPanel(); setTheme(settings.theme); setSkin(settings.skin); syncToggleStates(); applyVisibility();
+    switchTab(settings.activeTab); applyAllCardCollapses();
+    startContainerObserver(); hookScratchpad();
+    refreshStatsUI(); refreshRegenPanel(); refreshThinkingButtons(); maybeOfferRestore(); maybeStartScanner();
+    injectNetBridge(); postNetConfig();   // thinking-template override (MAIN world)
+    applyHideStyling();                   // grey out any "hidden from AI" messages
+    if(!scratchpadInterval) scratchpadInterval=setInterval(()=>{ if(active){
+      // Re-attach the observer if DreamJourney replaced the chat container
+      // (hard-refresh hydration recovery, React #418/#422, swaps the .scrollchatmessages
+      // node out from under us, orphaning the observer and freezing the stats).
+      const c=getContainer();
+      if(c&&c!==observedContainer) startContainerObserver();
+      // Self-heal the stats: the initial post-load count can run before bot avatars
+      // render (counts everything as user → N/0/N). Recompute periodically so it corrects.
+      refreshStatsUI();
+      hookScratchpad();refreshThinkingButtons();if(scanActive)runChatScan();applyHideStyling();
+    } },3000);
+  }
+  // Bot create/edit pages: build the panel (Creator tab) without chat wiring.
+  async function activateBotMode() {
+    active=true; botMode=true; genericMode=false; currentSessionId=null;
+    await loadAll();
+    if(!isBotPage()) return;
+    await waitFor(()=>document.querySelector('input[name="name"]')||document.querySelector('main'),15000,250);
+    if(!isBotPage()) return;
+    buildPanel(); setTheme(settings.theme); setSkin(settings.skin); syncToggleStates(); applyVisibility();
+    switchTab('creator', true); applyAllCardCollapses();
+    injectBotBridge(); startBotAutosave();
+  }
+  // Any other DreamJourney page: a present-but-collapsed panel, no chat/bot wiring.
+  async function activateGeneric() {
+    active=true; botMode=false; genericMode=true; currentSessionId=null;
+    await loadAll();
+    if(isSessionUrl()||isBotPage()) return;   // a real page took over while we awaited
+    buildPanel(); setTheme(settings.theme); setSkin(settings.skin); syncToggleStates(); applyVisibility();
+    switchTab(settings.activeTab||'chat', true); applyAllCardCollapses();
+    refreshQuillUI();
+  }
+  function deactivate() {
+    active=false; botMode=false; genericMode=false; stopBotAutosave();
+    hasScrolledToTop=false;
+    if(containerObserver){containerObserver.disconnect();containerObserver=null;}
+    observedContainer=null;
+    if(scratchpadInterval){clearInterval(scratchpadInterval);scratchpadInterval=null;}
+    clearTimeout(statsDebounce); clearTimeout(thinkingDebounce); clearTimeout(panelUpdateTo); clearTimeout(panelDebounce);
+    const p=document.getElementById('djt-panel');if(p)p.remove(); hideRestoreBar();
+    const lbov=document.getElementById('djt-lb-overlay');if(lbov)lbov.remove();
+    panelActive=false;
+    scanActive=false; clearChatScan(); clearTimeout(scanDebounce);
+    const rt=document.getElementById('djt-refresh-toast');if(rt)rt.remove();
+    const ex=[...document.querySelectorAll('.djt-del-thinking')];if(ex.length){djtMutating=true;ex.forEach(b=>b.remove());djtMutating=false;}
+    expectingReply=false;regenPending=false;regenTargetIdx=-1;regenAnchorUserId=null;previewIndex=null;currentSessionId=null;
+  }
+  function onRouteChange(){
+    if(isSessionUrl()){const sid=sessionIdFromUrl();if(sid&&sid===currentSessionId&&active&&!botMode&&!genericMode)return;if(active)deactivate();activate(sid);return;}
+    if(isBotPage()){if(active&&botMode){updateBotStatus('ok');return;}if(active)deactivate();activateBotMode();return;}
+    // Any other DreamJourney page: keep a present-but-collapsed generic panel.
+    if(active&&genericMode) return;        // already generic — don't rebuild on same-type nav
+    if(active)deactivate();
+    activateGeneric();
+  }
+  function setupRouteWatcher(){
+    const fire=()=>{try{onRouteChange();}catch(e){}};
+    const wrap=orig=>function(){const r=orig.apply(this,arguments);fire();return r;};
+    try{history.pushState=wrap(history.pushState);}catch(e){}
+    try{history.replaceState=wrap(history.replaceState);}catch(e){}
+    window.addEventListener('popstate',fire);
+    let last=location.href; setInterval(()=>{if(location.href!==last){last=location.href;fire();}},500);
+  }
+
+  // Esc closes any open toolkit modal. For the simple removable overlays we
+  // just remove them; for the confirm dialog we click its Cancel so the
+  // awaiting promise resolves cleanly.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const lb = document.getElementById('djt-lb-overlay');
+    if (lb) { lb.remove(); return; }
+    const cm = document.querySelector('.djt-modal-overlay');
+    if (cm) { const cancel = cm.querySelector('[data-v="cancel"]'); if (cancel) cancel.click(); else cm.remove(); }
+  });
+
+  // Live-apply settings changed from the Settings Window popup (themes now;
+  // visibility/quill consumed in later stages). Only pull the fields the popup
+  // owns so we never clobber in-memory panelPos/size/collapse state.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes[SETTINGS_KEY]) return;
+      const nv = changes[SETTINGS_KEY].newValue; if (!nv) return;
+      if (typeof nv.skin === 'string') settings.skin = nv.skin;
+      if (typeof nv.theme === 'string') settings.theme = nv.theme;
+      if (nv.hidden && typeof nv.hidden === 'object') settings.hidden = nv.hidden;
+      if (nv.quill && typeof nv.quill === 'object') settings.quill = Object.assign({}, DEFAULT_SETTINGS.quill, nv.quill);
+      if (document.getElementById('djt-panel')) { setSkin(settings.skin); setTheme(settings.theme); refreshQuillUI(); applyVisibility(); }
+    });
+  } catch (e) {}
+
+  setupDelegation(); setupRouteWatcher(); onRouteChange();
+})();

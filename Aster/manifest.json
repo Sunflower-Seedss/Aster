@@ -1,0 +1,81 @@
+{
+  "manifest_version": 3,
+  "name": "Aster",
+  "version": "3.2",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvDKWTYF7AG/1jqEXUlDCeo3AkmzNrlFxbbj/6A4R3ea8hKB6GXrDwgB1TkrbXeOI7tuY6on/qZhEeT55chH0ES0tLhYqsj7YChsk1q726BXmcHwkJmnK/tTHM2taDypPwJUu1vexOGDyxni316/qg/PVXVPlISia1LesmKzURkOknCws43jwI6t5j+kN1OpkdTphABpOF8CQ37co5xW4hXUMLAwteXnnOlyOXXHxJLQipJWsXNFmPi2G9Y+pZOeZhId8AufvfYMr37hrRXSFNlw5rYHVap6KFvO93gFaNmQrk+BAumC/RUcHa4dk60E1jUnRXMiiE+GOA15zAB9HKwIDAQAB",
+  "description": "Aster — quality-of-life tools for DreamJourney AI: chat stats, saved replies, lorebook tools, and Quill (connect your own local/API model). Local-only. Made by SunflowerS.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.dreamjourneyai.com/*",
+    "https://dreamjourneyai.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.dreamjourneyai.com/*",
+        "https://dreamjourneyai.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "toolkit.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Aster",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "help.html",
+        "help.js",
+        "lorebook-studio.html",
+        "lorebook-studio.js",
+        "creator-tools-help.html",
+        "quill-guide.html",
+        "dj-bridge.js",
+        "dj-net.js",
+        "icons/icon16.png",
+        "icons/icon32.png",
+        "icons/icon48.png",
+        "icons/icon128.png",
+        "icons/sun64.png",
+        "icons/quill.png",
+        "icons/chibi140.png",
+        "icons/bg-light.jpg",
+        "icons/bg-dark.jpg"
+      ],
+      "matches": [
+        "https://www.dreamjourneyai.com/*",
+        "https://dreamjourneyai.com/*"
+      ]
+    }
+  ]
+}
