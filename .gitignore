@@ -1,0 +1,19 @@
+# The repo tracks only the extension source (Aster/). Keep everything else out.
+
+# Build artifacts (zips, extracted pages, screenshots)
+dist/
+
+# Never commit packaged builds or signing keys
+*.zip
+*.pem
+*.crx
+
+# Local-only developer notes / guides (also ignored inside Aster/)
+CLAUDE.md
+LOREBOOK-GUIDE.md
+LOREBOOK-WORKSHOP-GUIDE.md
+
+# OS / tooling cruft
+.DS_Store
+Thumbs.db
+node_modules/

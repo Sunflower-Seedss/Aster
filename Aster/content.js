@@ -1902,6 +1902,8 @@
     const p = document.createElement('div'); p.id = 'djt-panel';
     const sunIconUrl = (() => { try { return chrome.runtime.getURL('icons/icon48.png'); } catch(e) { return ''; } })();
     const studioUrl  = (() => { try { return chrome.runtime.getURL('lorebook-studio.html'); } catch(e) { return '#'; } })();
+    const extVer     = (() => { try { return chrome.runtime.getManifest().version; } catch(e) { return ''; } })();
+    const asterPageUrl = 'https://sunflower-seedss.github.io/Sunflower-Seeds-Homebase/aster.html';
 
     p.innerHTML =
       // HEAD
@@ -2200,6 +2202,7 @@
             `<button id="djt-surprise-btn" class="djt-mini-btn full djt-surprise">&#127800; Surprise me!</button>` +
           `</div>` +
         `</div>` +
+        `<a id="djt-check-updates" class="djt-mini-btn full" href="${asterPageUrl}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;text-align:center;display:block;margin:2px 0 6px">&#128260; Check for updates` + (extVer ? ` (v${extVer})` : ``) + ` &#8599;</a>` +
         `<div class="djt-credit">Made by SunflowerS at Dreamjourney AI</div>` +
 
       `</div>` + // end djt-body
